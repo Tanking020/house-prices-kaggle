@@ -1,0 +1,22 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- Data (never commit: Kaggle rules + repo size) ----
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# ---- Outputs ----
+submissions/*.csv
+!submissions/.gitkeep
+
+# ---- Editor / OS ----
+.vscode/settings.json
+.DS_Store
+Thumbs.db
