@@ -1,0 +1,50 @@
+# ── 换行符统一规范 ─────────────────────────────────────────
+# 目的：让 Windows / macOS / Linux 上检出（checkout）的文件换行符一致，
+#       避免出现 "LF will be replaced by CRLF" 之类的警告，也避免 Git 里
+#       出现"整文件都变了"的假 diff。
+#
+# 规则：Git 仓库内部统一存 LF；文本文件检出时也用 LF。
+
+* text=auto eol=lf
+
+# ── 明确标记为文本文件 ─────────────────────────────────────
+*.py          text eol=lf
+*.ipynb       text eol=lf
+*.md          text eol=lf
+*.txt         text eol=lf
+*.csv         text eol=lf
+*.json        text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.toml        text eol=lf
+*.cfg         text eol=lf
+*.ini         text eol=lf
+*.sh          text eol=lf
+*.bat         text eol=crlf
+*.ps1         text eol=crlf
+requirements.txt text eol=lf
+.gitattributes   text eol=lf
+.gitignore       text eol=lf
+
+# ── 二进制文件：禁止换行符转换 ──────────────────────────────
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.bmp     binary
+*.svg     text eol=lf
+*.ico     binary
+*.pdf     binary
+*.zip     binary
+*.gz      binary
+*.7z      binary
+*.xlsx    binary
+*.joblib  binary
+*.pkl     binary
+*.h5      binary
+*.parquet binary
+*.onnx    binary
+
+# ── Git / GitHub 的语言统计 ─────────────────────────────────
+# notebook 不参与语言占比统计（否则 Jupyter 会占满整个语言条）
+*.ipynb   linguist-detectable=false
