@@ -78,10 +78,25 @@ house-prices-kaggle/
 
 ## 如何运行
 
+### 1. 准备环境
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+### 2. 准备数据
+
+数据来自 Kaggle 竞赛 [House Prices - Advanced Regression Techniques](https://www.kaggle.com/c/house-prices-advanced-regression-techniques/data)。
+出于竞赛规则与仓库体积考虑，**数据未纳入版本控制**，请自行下载后放到：
+
+```
+data/raw/
+├── train.csv
+├── test.csv
+├── sample_submission.csv
+└── data_description.txt
 ```
 
 ## 学习笔记
