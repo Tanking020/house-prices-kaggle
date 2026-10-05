@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
 # —— 列清单来自 EDA（见 notebooks/01_data_overview.ipynb）——
@@ -97,3 +98,33 @@ def build_encoder(X) -> ColumnTransformer:
     )
     ct.set_output(transform="pandas")
     return ct
+
+
+def build_preprocessor(X) -> Pipeline:
+    """把"填充 → 编码"串成一条预处理流水线。
+
+    只使用 X 的【列名/类型】来决定各步处理哪些列（不读数值），因此不构成泄漏。
+    真正的统计量（中位数、众数、类别清单）都在 `fit` 时才学习。
+    """
+    return Pipeline(
+        [
+            ("impute", build_imputer(X)),
+            ("encode", build_encoder(X)),
+        ]
+    )
+
+
+def make_pipeline(model, X) -> Pipeline:
+    """完整流水线：预处理 + 模型。**直接丢进 CV 即可**。
+
+    用法
+    ----
+    >>> pipe = make_pipeline(Ridge(), X_train)
+    >>> mean, std = cv_rmse_log(pipe, X_train, y_train)
+    """
+    return Pipeline(
+        [
+            ("prep", build_preprocessor(X)),
+            ("model", model),
+        ]
+    )
