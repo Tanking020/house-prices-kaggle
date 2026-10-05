@@ -25,7 +25,7 @@
 |------|------|------|
 | 0 · 数据分析（EDA） | ✅ 完成 | 缺失值语义、偏态、类别基数、特征与目标关系、train/test 一致性；结论见 [`notebooks/01_data_overview.ipynb`](notebooks/01_data_overview.ipynb) |
 | A · 造"尺子" | ✅ 完成 | 统一的 5 折 CV + log 空间 RMSE，见 [`src/house_prices/evaluate.py`](src/house_prices/evaluate.py) |
-| B · 预处理 + 基线 + 首次提交 | 🚧 进行中 | 缺失值填充、类别编码已完成；待组装 `Pipeline` 并跑基线 |
+| B · 预处理 + 基线 + 首次提交 | ✅ 完成 | 完整预处理装进 `Pipeline` + `Ridge` 基线，并**首次提交**（Public LB 0.14206）；记录见 [`docs/experiments.md`](docs/experiments.md) |
 | C~G · 特征工程 → 模型升级 → 调参 → 融合 → 复盘 | ⬜ 未开始 | 路线图见 [`docs/roadmap.md`](docs/roadmap.md) |
 
 > 📍 完整推进计划见 [`docs/roadmap.md`](docs/roadmap.md)（7 阶段 + 2 里程碑）。
@@ -50,7 +50,7 @@
 | 用 Label Encoding 编码名义类别 | 给无序类别强加了假顺序 | 名义用 One-Hot，有序用 Ordinal | ✅ 已在编码中实践 |
 | 填充时只看均值 | 右偏数据被带偏 | 偏态数据用**中位数** | ✅ 已在预处理中实践 |
 | 看到异常值就删 | 丢掉真实信息 | 先记录，用 CV 验证后再决定 | ✅ 已在 EDA 中实践（只标记未删） |
-| 提交时忘了 `expm1` | 提交的是对数值，分数爆炸 | 训练在 log 空间，提交必须变回原尺度 | ⏳ 待首次提交 |
+| 提交时忘了 `expm1` | 提交的是对数值，分数爆炸 | 训练在 log 空间，提交必须变回原尺度 | ✅ 已实践（首次提交，Public LB 0.14206） |
 
 ### 二、我认为最重要的几条纪律
 
@@ -118,6 +118,23 @@ data/raw/
 └── data_description.txt
 ```
 
+### 3. 提交成绩（Kaggle CLI）
+
+Kaggle 网页的提交页偶尔加载不出上传框（只显示一行 `Need help making a submission? ...` 占位文字）。
+改用官方 CLI 更稳、也留得下痕迹：
+
+```powershell
+# 首次：浏览器登录（会打开网页授权，只需做一次）
+.\.venv\Scripts\kaggle.exe auth login
+
+# 每次提交
+.\.venv\Scripts\kaggle.exe competitions submit house-prices-advanced-regression-techniques `
+  -f submissions\submission_v1.csv -m "改动说明"
+```
+
+> ⚠️ 提交前自查：已 `expm1` 还原、列名 `Id,SalePrice`、1459 行、Id 范围 1461~2919。
+> 进度条会往 stderr 输出，PowerShell 里可能显示一片红字，**属正常现象**。
+
 ## 学习笔记
 
 完整笔记见 [`docs/study_notes.md`](docs/study_notes.md)，包含：
@@ -133,11 +150,11 @@ data/raw/
 
 ## 实验结果
 
-> 🚧 待补充：随项目推进更新（目前处于学习与探索阶段）
+> 🚧 持续更新中。首次提交 **Public LB = 0.14206**（本地 CV 0.14627，二者接近 → 无泄漏迹象）。
 
 | 阶段 | 做法 | CV (RMSE-log) |
 |------|------|---------------|
-| 基线 | | |
+| 基线 | `Pipeline`（4 类填充 + One-Hot/Ordinal）+ `Ridge(alpha=1)` | 0.14627 ± 0.02960（5×10） |
 | + 特征工程 | | |
 | + 模型升级 | | |
 | + 模型融合 | | |
@@ -147,8 +164,8 @@ data/raw/
 - [x] 数据分析（EDA）
 - [x] 统一的评估方案（5 折 CV 尺子）
 - [x] 缺失值处理与类别编码
-- [ ] 组装 `Pipeline`，建立基线模型
-- [ ] 完成首次 Kaggle 提交（打通闭环 · 里程碑 1）
+- [x] 组装 `Pipeline`，建立基线模型
+- [x] 完成首次 Kaggle 提交（打通闭环 · 里程碑 1）
 - [ ] 特征工程与离群点验证
 - [ ] 升级模型（XGBoost / LightGBM / CatBoost）并调参
 - [ ] 模型融合（OOF Stacking）
