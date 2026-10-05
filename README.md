@@ -87,7 +87,8 @@ house-prices-kaggle/
 │   ├── roadmap.md         # ⭐ 完整路线图（7 阶段 + 2 里程碑）
 │   ├── study_notes.md     # ⭐ 完整学习笔记（10 步流程 + 难点拓展）
 │   ├── experiments.md     # 实验记录（改了什么 → CV 分数 → 结论）
-│   └── glossary.zh.md     # 数据字典中英对照速查
+│   ├── glossary.zh.md     # 数据字典中英对照速查
+│   └── python_syntax_notes.zh.md  # ⭐ Python 与常用库「读代码」速查（语法/参数怎么看）
 ├── notebooks/             # 探索性分析（01 · 数据总览与 EDA）
 ├── reports/figures/       # 图表输出
 ├── src/house_prices/      # 可复用代码（data / evaluate / preprocess）
@@ -145,6 +146,11 @@ Kaggle 网页的提交页偶尔加载不出上传框（只显示一行 `Need hel
 - **附录**：数据泄漏专题、术语速查、常见坑总表、面试高频问题
 
 数据字典中英对照见 [`docs/glossary.zh.md`](docs/glossary.zh.md)。
+
+**代码/语法/库看不懂**（"这函数要传几个参数？参数是什么意思？"）→ 看
+[`docs/python_syntax_notes.zh.md`](docs/python_syntax_notes.zh.md)：
+教你**怎么看函数参数**、项目用到的 Python/numpy/pandas/sklearn 语法速查、
+以及"库要不要背"的答案（不背，但要会查）。
 
 ---
 

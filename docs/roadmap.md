@@ -1,7 +1,7 @@
 # House Prices 项目 · 完整路线图（初学者版）
 
 > **用途**：把"从零到完成"的每一步摊开，让使用者（ML 初学者）知道**现在在哪、下一步做什么、为什么**。
-> **配套**：详细知识点见 `docs/study_notes.md`；实验记录见 `docs/experiments.md`；协作规范见 `.github/copilot-instructions.md`。
+> **配套**：详细知识点见 `docs/study_notes.md`；**代码/语法/库看不懂**见 `docs/python_syntax_notes.zh.md`；实验记录见 `docs/experiments.md`；协作规范见 `.github/copilot-instructions.md`。
 > **最后更新**：2026-09-27
 
 ---
