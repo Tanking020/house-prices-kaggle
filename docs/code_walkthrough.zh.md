@@ -15,7 +15,7 @@
 | 2 | `src/house_prices/evaluate.py` | §2.1 ~ §2.4 | ✅ |
 | 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.8 | ✅ |
 | 4 | `src/house_prices/models.py` | §六 | ✅ |
-| 5 | `tests/*.py`（18 个脚本） | §5.0 ~ §5.4 | ✅ |
+| 5 | `tests/*.py`（19 个脚本） | §5.0 ~ §5.4 | ✅ |
 
 > 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §六 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
 > 每个小节的组织固定为：**它干什么 → 逐句讲 → 语法点表**。
@@ -48,6 +48,7 @@
 | `tests/run_feature_extra.py` | ~80 行 | §5.1 + §5.2 |
 | `tests/smoke_target_encoder.py` | ~95 行 | §5.1 + §5.2 |
 | `tests/run_target_encoding.py` | ~80 行 | §5.1 + §5.2 |
+| `tests/run_outlier_check.py` | ~90 行 | §5.1 + §5.2 |
 | `tests/make_submission.py` | ~65 行 | §5.1 + §5.2 |
 
 > ⚠️ `notebooks/*.ipynb` 是**探索性分析**，不是可复用代码；它内部自带中文说明，不在本文档范围内。
@@ -125,6 +126,7 @@
 | 62 | **`itertools.product(A, B, repeat=n)`** | §5.2 | 笛卡尔积 → 造**参数网格** |
 | 63 | `np.column_stack([a, b, ...])` | §5.2 | 多个一维数组拼成一个**矩阵**（每列一个） |
 | 64 | `np.corrcoef(M, rowvar=False)` | §5.2 | **相关系数矩阵**（`rowvar=False` = 每列是一个变量） |
+| 65 | **`~布尔掩码`** + `idx[~mask[idx]]` | §5.2 | `~` 取反；“只从训练折里排除某几行”的关键写法 |
 
 ---
 
@@ -1030,9 +1032,10 @@ def make_pipeline(model, X, derived_features: tuple = (),
 | `run_feature_extra.py` | **补特征**：候选特征体检 + 单个特征 A/B 筛选 | ✅ |
 | `smoke_target_encoder.py` | 冒烟：目标编码的 **OOF 是否真生效**（可精确检验的三条性质） | ❌ |
 | `run_target_encoding.py` | **补特征**：目标编码 A/B（Neighborhood / MSSubClass） | ✅ |
+| `run_outlier_check.py` | **数据清洗**：离群点是否剔除（含“考卷不能变”的方法论对照） | ✅ |
 | `make_submission.py` | 生成提交文件 + 格式自检 | ❌ |
 
-## 5.1 公共骨架（18 个脚本几乎一样的部分）
+## 5.1 公共骨架（19 个脚本几乎一样的部分）
 
 ### ① 开头的文档字符串 —— 写清"怎么运行"
 
@@ -1901,6 +1904,46 @@ CASES = [
 > 📌 先跑冒烟把 bug 挡在门外，再用两个便宜→贵的尺子跑实验——
 > 这套“**先验证实现，再验证价值**”的顺序，是目标编码这种高风险特征的标准做法。
 
+### `run_outlier_check.py` —— **"考卷不能变"**：一个价值 17 倍的方法论
+
+> 🧒 先看这个实验差点骗了我们什么：
+>
+> | 做法 | CV RMSE | 看起来的改善 |
+> |---|---|---|
+> | ① 参考（全量训练 + 全量验证） | 0.12083 | — |
+> | ② **只在训练折剔除**（严格可比） | **0.12034** | **−0.00049**（≈ 0） |
+> | ③ 连验证集一起剔除（❌ 常见错误） | 0.11255 | **−0.00828**（**假象**） |
+>
+> **两个数差 17 倍。** 原因：那两行 `Id` 524/1299 正是"又大又便宜、根本预测不准"的样本，
+> 把它们从数据集里删掉 = **把考卷里最难的题撕掉** → 分数自然好看，但**不是模型变好了**。
+
+```python
+def cv_train_dropout(X, y, drop_mask=None, n_splits=5, seed=42):
+    y_log = np.log1p(y).to_numpy()
+    dropped = np.zeros(len(X), dtype=bool) if drop_mask is None else drop_mask.to_numpy()
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    scores = []
+    for tr_idx, va_idx in kf.split(X):
+        tr_idx = tr_idx[~dropped[tr_idx]]        # ← 关键：只从训练折里去掉
+        pipe = make_pipeline(...)
+        pipe.fit(X.iloc[tr_idx], y_log[tr_idx])
+        scores.append(rmse(y_log[va_idx], pipe.predict(X.iloc[va_idx])))
+    return float(np.mean(scores)), float(np.std(scores))
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`~dropped`** | `~` 是**取反**：布尔数组里 `True↔False`（"要删的"变成"要留的"） |
+| `dropped[tr_idx]` | 先**按训练折的位置**取出对应的掩码（长度 = 训练折大小） |
+| `tr_idx[~dropped[tr_idx]]` | 再在**训练折的下标数组**上做布尔筛选 ⭐ 这是"只从训练折里排除几行"的标准写法 |
+| `np.zeros(len(X), dtype=bool)` | 默认掩码 = 全 False（"啥都不删"） |
+
+> 📌 **本脚本手写了 CV 循环**（没用 `cv_rmse_log`），因为要做"训练集与验证集**不一样**的剔除"
+> —— 标准尺子没这个选项。**当工具的假设不匹配你的问题时，就自己写那个循环**，别硬凑。
+>
+> 🧒 **一句话记住**：**想知道"删数据有没有用"，考卷（验证集）必须保持不变，只改训练。**
+> 凡是"删完之后分数变好多"的实验，先问一句：**验证集是不是也变了？**
+
 ### `make_submission.py` 前半段 —— 全量训练 → `expm1` → 按 Id 对齐
 
 ```python
@@ -2063,4 +2106,4 @@ def make_best_model() -> CatBoostRegressor:
 | 3 | `src/house_prices/evaluate.py` | ✅ |
 | 4 | `src/house_prices/preprocess.py` | ✅ |
 | 5 | `src/house_prices/models.py` | ✅ |
-| 6 | `tests/*.py`（18 个脚本） | ✅ |
+| 6 | `tests/*.py`（19 个脚本） | ✅ |

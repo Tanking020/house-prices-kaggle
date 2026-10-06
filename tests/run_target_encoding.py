@@ -13,6 +13,8 @@
    ⚠️ 判断有没有泄漏的办法：如果"训练集分数突然变得特别好、CV 却变差" → 立刻查这里。
 
 参考配方固定为当前最好：`QualArea` + `TotalSF`，模型 = `models.make_best_model()`。
+基础目标编码列固定为 `Neighborhood`（实验 #28 已确认有效）：
+本批次在它**之上**逐个再加一个候选列，看还能不能再涨。
 """
 from __future__ import annotations
 
@@ -33,22 +35,27 @@ from house_prices.preprocess import make_pipeline                  # noqa: E402
 REPEATS = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 BASE = ("QualArea", "TotalSF")
 
-CASES = [
-    ("参考（不做目标编码）", ()),
-    ("+ 目标编码 Neighborhood", ("Neighborhood",)),
-    ("+ 目标编码 + MSSubClass", ("Neighborhood", "MSSubClass")),
-]
+# 已确认有效的基础（实验 #28）—— 本批次在它之上再找
+TE_BASE = ("Neighborhood",)
+
+# 本批次候选：其它“取值较多”的类别列
+CANDIDATES = ["Exterior2nd", "Exterior1st", "Foundation", "SaleType",
+              "GarageType", "SaleCondition"]
+
+CASES = [("参考 = 只做 Neighborhood", TE_BASE)]
+CASES += [(f"+ 目标编码 {c}", TE_BASE + (c,)) for c in CANDIDATES]
+CASES += [("+ 全部候选一起", TE_BASE + tuple(CANDIDATES))]
 
 
-def report_cardinality(X, y) -> None:
+def report_cardinality(X) -> None:
     """看一眼候选列：有多少个类别？每类多少样本？（说明为什么需要平滑）"""
     print("候选列的类别分布（说明为什么必须平滑）")
-    for col in ("Neighborhood", "MSSubClass"):
+    for col in TE_BASE + tuple(CANDIDATES):
         counts = X[col].value_counts()
         print(f"  {col:<14s} 共 {len(counts):>2d} 类 | "
               f"最少 {int(counts.min())} 条、最多 {int(counts.max())} 条、"
               f"中位数 {int(counts.median())} 条")
-    print("  ⚠️ 样本最少的类别只有个位数 → 直接取均值会极不稳定 → 必须向全局均值收缩\n")
+    print("  ⚠️ 类别样本少时均值极不稳定 → 必须向全局均值收缩\n")
 
 
 def main() -> None:
@@ -56,11 +63,11 @@ def main() -> None:
     X, y = get_xy(train)
 
     print(f"参考配方 {BASE}；模型 = CatBoost 最优配置；CV = 5 折 × {REPEATS}\n")
-    report_cardinality(X, y)
+    report_cardinality(X)
 
     print(f"CV 结果（越小越好；噪声线 ≈ 0.001）")
-    print(f"  {'方案':<26s} {'CV RMSE(log)':>14s} {'相比参考':>10s} {'用时':>8s}")
-    print("  " + "-" * 64)
+    print(f"  {'方案':<28s} {'CV RMSE(log)':>14s} {'相比参考':>10s} {'用时':>8s}")
+    print("  " + "-" * 66)
 
     ref = None
     for label, te_cols in CASES:
@@ -75,7 +82,7 @@ def main() -> None:
         delta = "—" if ref is None else f"{mean - ref:+.5f}"
         if ref is None:
             ref = mean
-        print(f"  {label:<26s} {mean:>8.5f}±{std:.5f} {delta:>10s} {used:>7.1f}s")
+        print(f"  {label:<28s} {mean:>8.5f}±{std:.5f} {delta:>10s} {used:>7.1f}s")
 
 
 if __name__ == "__main__":
