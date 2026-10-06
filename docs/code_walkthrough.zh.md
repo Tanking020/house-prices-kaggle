@@ -14,9 +14,10 @@
 | 1 | `src/house_prices/data.py` | §1.1 ~ §1.5 | ✅ |
 | 2 | `src/house_prices/evaluate.py` | §2.1 ~ §2.4 | ✅ |
 | 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.7 | ✅ |
-| 4 | `tests/*.py`（15 个脚本） | §5.0 ~ §5.4 | ✅ |
+| 4 | `src/house_prices/models.py` | §六 | ✅ |
+| 5 | `tests/*.py`（15 个脚本） | §5.0 ~ §5.4 | ✅ |
 
-> 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §五 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
+> 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §六 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
 > 每个小节的组织固定为：**它干什么 → 逐句讲 → 语法点表**。
 
 ### 覆盖检查表（确认没有遗漏任何代码文件）
@@ -26,7 +27,8 @@
 | `src/house_prices/__init__.py` | ~10 行 | §1.0 |
 | `src/house_prices/data.py` | ~35 行 | §1.1 ~ §1.5 |
 | `src/house_prices/evaluate.py` | ~90 行 | §2.1 ~ §2.4 |
-| `src/house_prices/preprocess.py` | ~200 行 | §4.0 ~ §4.7 |
+| `src/house_prices/preprocess.py` | ~220 行 | §4.0 ~ §4.7 |
+| `src/house_prices/models.py` | ~45 行 | §六 |
 | `tests/smoke_evaluate.py` | ~50 行 | §5.1 + §5.2 |
 | `tests/smoke_preprocess.py` | ~45 行 | §5.1 + §5.2 |
 | `tests/smoke_encoder.py` | ~55 行 | §5.1 + §5.2 |
@@ -1637,7 +1639,19 @@ def model_with_cats(cat_cols: list[str] | None) -> CatBoostRegressor:
 | `sample.to_csv(path, index=False)` | 写出 csv；⚠️ 不写 `index=False` 会多出一列 pandas 行号 |
 
 > 🧒 **三条铁律**：① 提交用**全量**训练（不留验证集）；② 预测结果必须 **`expm1`** 还原；③ 必须**按 Id 对齐**。
-> ⚠️ 第 ② 条忘了，提交上去的就是"对数值"，分数会**爆炸**。
+> ⚠️ 第 ② 条忘了，提交上去的就是"对数值"，**分数会爆炸**。
+
+> ⭐ **"单一事实来源"这个模式值得记住**（详见 §六）：
+> 提交脚本里**不再写死**模型参数，而是 `from house_prices.models import make_best_model`。
+> 🧒 **为什么？** 阶段 E 之后模型参数改了好几次，如果每个脚本各抄一份，
+> 早晚会出现"实验里是 0.11993 的配置、提交文件却用了另一个"的错配。
+> **把"当前最好"收敛到一个函数，别处只管调用** —— 这就是工程上说的"单一事实来源"。
+
+> ⭐ **“单一事实来源”这个模式值得记住**（详见 §六）：
+> 提交脚本里**不再写死**模型参数，而是 `from house_prices.models import make_best_model`。
+> 🧒 **为什么？** 阶段 E 之后模型参数改了好几次，如果每个脚本各拄一份，
+> 早晚会出现"实验里是 0.11993 的配置、提交文件却用了另一个"的错配。
+> **把“当前最好”收敛到一个函数，别处只管调用** —— 这就是工程上说的“单一事实来源”。
 
 ### `make_submission.py` 后半段 —— 字典 + `all()` 做格式自检
 
@@ -1682,11 +1696,89 @@ def model_with_cats(cat_cols: list[str] | None) -> CatBoostRegressor:
 
 ---
 
+# 六、`src/house_prices/models.py` —— 「当前最好」的单一事实来源
+
+**这个文件很短，但它是工程上最值钱的一个习惯。**
+
+## 6.1 它解决什么问题？
+
+阶段 E 里，我们的模型参数在**好几个实验脚本**里各写了一份。一旦要"用最好配置生成提交文件"：
+
+| | 没有这个文件 | 有这个文件 |
+|---|---|---|
+| 改参数 | 去每个脚本里找、手工同步 | **只改一个地方** |
+| 风险 | 抄错一个数字 → 提交的**不是你以为的那个模型** | 不可能错配 |
+| 可读性 | "当前最好到底是哪个？"要翻实验记录 | 打开文件就看见 |
+
+## 6.2 逐句讲
+
+```python
+BEST_DERIVED_FEATURES = ("QualArea", "TotalSF")
+```
+
+| 语法点 | 说明 |
+|---|---|
+| 常量名**全大写** | Python 约定："这是个常量，别在运行中改它" |
+| 元组 `(...)` | 与 `preprocess.build_preprocessor` 的 `derived_features` 参数**同一类型**（不用再转换） |
+
+```python
+BEST_PARAMS = dict(
+    iterations=1200,
+    learning_rate=0.025,
+    depth=6,
+    random_seed=42,
+    verbose=0,                     # 不打印训练日志
+    allow_writing_files=False,     # 不生成 catboost_info/ 目录
+)
+
+
+def make_best_model() -> CatBoostRegressor:
+    return CatBoostRegressor(**BEST_PARAMS)
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `dict(键=值, ...)` | 用**关键字参数**造字典（比写 `{"键": 值}` 少打引号） |
+| **`CatBoostRegressor(**BEST_PARAMS)`** | `**` 把字典**展开成关键字参数** —— 与 §5.2 的 `dict(**BEST, ...)` 是同一个符号的两种用法 |
+| **函数而不是常量** | 返回**新建的模型对象**：每次调用都是全新的（已被 `fit` 的那个不会被污染） |
+
+> 🧒 **为什么写成函数 `make_best_model()` 而不是直接存一个模型对象？**
+> 因为 sklearn 的估计器是**有状态**的：`fit` 会**原地修改**它（见 §5.2 `smoke_sklearn_concepts.py` 的验证）。
+> 若全局只存一个对象，第一次 `fit` 后它就被污染了 → **每次要用都新建一个**。
+> 📌 这个"**工厂函数**"习惯，和 `run_tuning_depth.py` 的 `make_model(depth)` 是同一个套路。
+
+## 6.3 它还承载了「可追溯性」
+
+文件头的文档字符串里有一张表，把**每个参数的实验依据**都标了出来：
+
+| 参数 | 值 | 依据 |
+|---|---|---|
+| `depth` | 6 | 实验 #18：扫 2~8，CV 呈 U 形，最低点就是默认值 6 |
+| `learning_rate` | 0.025 | 实验 #19：3×3 网格最低点 |
+| `iterations` | 1200 | 实验 #19：与学习率**耦合**，300 轮时明显欠训练 |
+| 配方 | `QualArea` + `TotalSF` | 实验 #6、#10 |
+
+> 🧒 **这就是"证据链"**：半年后你回看这个文件，不需要重新翻实验记录，
+> 就能知道"为什么是这个值"。简历上写"调参"没人信，
+> **能指着一行参数说出它来自哪次实验**才是真本事。
+
+## 6.4 使用约定
+
+| 场景 | 怎么做 |
+|---|---|
+| 生成提交文件 | ✅ 用 `make_best_model()` |
+| 想复现当前最好分数 | ✅ 用 `make_best_model()` + `BEST_DERIVED_FEATURES` |
+| **做新实验对比** | ❌ **不要**用！在自己的脚本里显式写参数 —— 否则"实验中的候选"和"当前最好"会混在一起，实验记录对不上号 |
+
+---
+
 ## ✅ 全文档完成
 
 | 顺序 | 文件 | 状态 |
 |---|---|---|
-| 1 | `src/house_prices/data.py` | ✅ |
-| 2 | `src/house_prices/evaluate.py` | ✅ |
-| 3 | `src/house_prices/preprocess.py` | ✅ |
-| 4 | `tests/*.py` | ✅ |
+| 1 | `src/house_prices/__init__.py` | ✅ |
+| 2 | `src/house_prices/data.py` | ✅ |
+| 3 | `src/house_prices/evaluate.py` | ✅ |
+| 4 | `src/house_prices/preprocess.py` | ✅ |
+| 5 | `src/house_prices/models.py` | ✅ |
+| 6 | `tests/*.py`（15 个脚本） | ✅ |

@@ -26,7 +26,11 @@
 | 0 · 数据分析（EDA） | ✅ 完成 | 缺失值语义、偏态、类别基数、特征与目标关系、train/test 一致性；结论见 [`notebooks/01_data_overview.ipynb`](notebooks/01_data_overview.ipynb) |
 | A · 造"尺子" | ✅ 完成 | 统一的 5 折 CV + log 空间 RMSE，见 [`src/house_prices/evaluate.py`](src/house_prices/evaluate.py) |
 | B · 预处理 + 基线 + 首次提交 | ✅ 完成 | 完整预处理装进 `Pipeline` + `Ridge` 基线，并**首次提交**（Public LB 0.14206）；记录见 [`docs/experiments.md`](docs/experiments.md) |
-| C~G · 特征工程 → 模型升级 → 调参 → 融合 → 复盘 | ⬜ 未开始 | 路线图见 [`docs/roadmap.md`](docs/roadmap.md) |
+| C · 特征工程 | ✅ 完成 | 从"配方表"机制试特征：`TotalSF`（线性组合）、`QualArea`（交互项）、阈值型 0/1 标志筛查；**`QualArea` 有效**（实验 #5~#7） |
+| D · 模型升级 | ✅ 完成 | 决策树 → 随机森林 → GBDT → **XGBoost / LightGBM / CatBoost 三库对比**；结论：CatBoost 最好，学习率小+树多更稳（实验 #8~#17） |
+| E · 调参 + 表示方式 | ✅ 完成 | 单变量扫 `depth`（U 形，默认值已最优）→ 联合扫 `lr × iterations`（**新最好 CV 0.11993**）→ 换种子复核排名稳健 → 原生 `cat_features` 无增益但慢 17 倍（实验 #18~#22） |
+| F · 模型融合 + 最终提交 | 🚧 进行中 | v2 已提交：**Public LB 0.12517**（较 v1 提升 0.01689） |
+| G · 复盘 | ⬜ 未开始 | 路线图见 [`docs/roadmap.md`](docs/roadmap.md) |
 
 > 📍 完整推进计划见 [`docs/roadmap.md`](docs/roadmap.md)（7 阶段 + 2 里程碑）。
 
@@ -128,9 +132,10 @@ Kaggle 网页的提交页偶尔加载不出上传框（只显示一行 `Need hel
 # 首次：浏览器登录（会打开网页授权，只需做一次）
 .\.venv\Scripts\kaggle.exe auth login
 
-# 每次提交
-.\.venv\Scripts\kaggle.exe competitions submit house-prices-advanced-regression-techniques `
-  -f submissions\submission_v1.csv -m "改动说明"
+# 每次提交（版本号可自定，默认 v2）
+.\\.venv\\Scripts\\python.exe tests\\make_submission.py v2
+.\\.venv\\Scripts\\kaggle.exe competitions submit -c house-prices-advanced-regression-techniques `
+  -f submissions\\submission_v2.csv -m "改动说明"
 ```
 
 > ⚠️ 提交前自查：已 `expm1` 还原、列名 `Id,SalePrice`、1459 行、Id 范围 1461~2919。
@@ -154,20 +159,24 @@ Kaggle 网页的提交页偶尔加载不出上传框（只显示一行 `Need hel
 
 **想知道"项目代码每一句在干什么"** → 看
 [`docs/code_walkthrough.zh.md`](docs/code_walkthrough.zh.md)：
-逐行讲解 `data.py` / `evaluate.py`（含语法拆解），`preprocess.py` 待续。
+**逐行讲解全部 Python 代码**（`src/**` 4 个文件 + `tests/**` 15 个脚本），
+含「目录」「覆盖检查表」和 **§〇 语法总索引**（每条语法只详解一次）。
 
 ---
 
 ## 实验结果
 
-> 🚧 持续更新中。首次提交 **Public LB = 0.14206**（本地 CV 0.14627，二者接近 → 无泄漏迹象）。
+> 持续更新中。最新提交 **Public LB = 0.12517**（v2，本地 CV 0.11993）。
+> ⚠️ CV 与 LB 的差在 **±0.005** 量级内属正常抖动（Public LB 只用约一半测试集），
+> **看大方向即可**：CV 从 0.14627 → 0.11993，LB 从 0.14206 → 0.12517，方向一致。
 
 | 阶段 | 做法 | CV (RMSE-log) |
 |------|------|---------------|
 | 基线 | `Pipeline`（4 类填充 + One-Hot/Ordinal）+ `Ridge(alpha=1)` | 0.14627 ± 0.02960（5×10） |
-| + 特征工程 | | |
-| + 模型升级 | | |
-| + 模型融合 | | |
+| + 特征工程 | 加 `QualArea = OverallQual × GrLivArea`、`TotalSF = 地下室+1楼+2楼` | 0.14383 ± 0.02699（Ridge） |
+| + 模型升级 | 随机森林(200) → GBDT(300, lr=0.05) → CatBoost(300, lr=0.05) | **0.12263 ± 0.01060** |
+| + 调参 | CatBoost `lr=0.025, iterations=1200, depth=6`（并换数据划分复核过） | **0.11993 ± 0.01050（当前最好）** |
+| + 模型融合 | 🚧 待做（加权平均 / Stacking） | |
 
 ## 待办
 
