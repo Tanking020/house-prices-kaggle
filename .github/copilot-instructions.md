@@ -168,6 +168,55 @@
   - 提交信息末尾附 Co-authored-by trailer（见全局约定）；
   - commit 只包含本任务相关改动，不夹带无关文件。
 - commit message 用中文、写清"改了什么"，便于回看留痕。
+- ⚠️ **`git push` 失败时不要下意识去开 VPN** —— 先走下面的排查顺序。
+
+### Git 走 SSH，不走 HTTPS（已定，别再改回去）⭐
+
+> **背景**：本机用 HTTPS 推 GitHub 会报 `schannel: failed to receive handshake, SSL/TLS
+> connection failed`，必须挂 VPN 才能推，很麻烦。改用 **SSH** 后**不开 VPN 也能推**。
+
+**当前配置（已完成，勿动）**
+
+| 项 | 值 |
+|----|-----|
+| remote | `git@github.com:Tanking020/house-prices-kaggle.git`（**SSH 形式**，不是 `https://...`） |
+| 私钥 | `~/.ssh/id_ed25519`（ed25519，无口令） |
+| 公钥 | 已添加到 GitHub 账号（`ssh-ed25519 AAAA...OCbE 2335377325@qq.com`） |
+| `~/.ssh/config` | `Host github.com` → `HostName ssh.github.com`、`Port 443`、`IdentityFile ~/.ssh/id_ed25519` |
+
+> 🧒 **为什么 config 里要绕到 `ssh.github.com:443`？**
+> 国内网络常封 SSH 的 22 端口；GitHub 官方提供 `ssh.github.com` 的 **443** 端口作为备用通道。
+> 走它就能在不开 VPN 的情况下稳定推送。
+
+**push 失败时的排查顺序（从第 1 步开始，别跳）**
+
+```powershell
+# ① 认证通不通？（成功会打印：Hi Tanking020! You've successfully authenticated...）
+ssh -T -o StrictHostKeyChecking=accept-new git@github.com
+
+# ② remote 是不是 SSH 形式？（必须是 git@github.com:...）
+git remote -v
+#    若还是 https://...  → 改回来：
+#    git remote set-url origin git@github.com:Tanking020/house-prices-kaggle.git
+
+# ③ 再推一次
+git push
+```
+
+- ① 失败 → 检查 `~/.ssh/id_ed25519` 在不在、公钥是否还在 GitHub（https://github.com/settings/keys）
+- ① 成功但 ③ 失败 → 看报错：若是权限/分支保护问题，**不要**去开 VPN
+- 只有上述都排查完仍失败，才考虑网络原因
+
+**换新电脑时怎么重建（3 步）**
+
+```powershell
+ssh-keygen -t ed25519 -C "2335377325@qq.com"      # 一路回车（不要设口令）
+Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub" # 复制输出
+# → 粘贴到 https://github.com/settings/ssh/new
+git remote set-url origin git@github.com:Tanking020/house-prices-kaggle.git
+```
+
+- ⚠️ `~/.ssh/config` 里的 `ssh.github.com:443` 那段要一并重建（见上表）
 
 ---
 
