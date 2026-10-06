@@ -14,7 +14,7 @@
 | 1 | `src/house_prices/data.py` | §1.1 ~ §1.5 | ✅ |
 | 2 | `src/house_prices/evaluate.py` | §2.1 ~ §2.4 | ✅ |
 | 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.7 | ✅ |
-| 4 | `tests/*.py`（10 个脚本） | §5.0 ~ §5.4 | ✅ |
+| 4 | `tests/*.py`（11 个脚本） | §5.0 ~ §5.4 | ✅ |
 
 > 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §五 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
 > 每个小节的组织固定为：**它干什么 → 逐句讲 → 语法点表**。
@@ -36,6 +36,7 @@
 | `tests/run_experiment.py` | ~55 行 | §5.1 + §5.2 |
 | `tests/run_model_experiment.py` | ~50 行 | §5.1 + §5.2 |
 | `tests/run_boosting_experiment.py` | ~100 行 | §5.1 + §5.2 |
+| `tests/run_tuning_depth.py` | ~70 行 | §5.1 + §5.2 |
 | `tests/make_submission.py` | ~65 行 | §5.1 + §5.2 |
 
 > ⚠️ `notebooks/*.ipynb` 是**探索性分析**，不是可复用代码；它内部自带中文说明，不在本文档范围内。
@@ -65,7 +66,7 @@
 | 14 | `enumerate(x, start=1)` | §2.3 | 遍历时带序号 |
 | 15 | **花式索引** `y[idx]`（下标数组） | §2.3 | 一次取一整批样本 |
 | 16 | `clone(model)` | §2.3 | 复制"未训练"的模型 |
-| 17 | f-string 格式化 `{x:.5f}` / `{x:36s}` / `{y:,.0f}` | §2.3 §5.2 | 控精度 / 对齐 / 千分位 |
+| 17 | f-string 格式化 `{x:.5f}` / `{x:36s}` / `{x:>5}`（右对齐）/ `{y:,.0f}` | §2.3 §5.2 | 控精度 / 对齐 / 千分位 |
 | 18 | **三元表达式** `A if 条件 else B` | §2.4 | 一行的 if/else |
 | 19 | `hasattr(obj, "name")` | §2.4 | 检查属性是否存在 |
 | 20 | `_名字` 下划线开头 | §2.4 | "模块内部私有"约定 |
@@ -864,9 +865,10 @@ def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
 | `run_experiment.py` | 特征工程 A/B 实验 | ✅ |
 | `run_model_experiment.py` | **模型升级**实验（换模型） | ✅ |
 | `run_boosting_experiment.py` | 三库对比（XGBoost / LightGBM / CatBoost）+ 树复杂度诊断 | ✅ |
+| `run_tuning_depth.py` | **调参**：单变量扫描 CatBoost `depth`（含过拟合诊断） | ✅ |
 | `make_submission.py` | 生成提交文件 + 格式自检 | ❌ |
 
-## 5.1 公共骨架（10 个脚本几乎一样的部分）
+## 5.1 公共骨架（11 个脚本几乎一样的部分）
 
 ### ① 开头的文档字符串 —— 写清"怎么运行"
 
@@ -1186,6 +1188,77 @@ def main() -> None:
 >
 > ⚠️ 注意 `set_params(model__alpha=...)` 里的 `model__` 就是**步骤名 + 双下划线 + 参数名**，
 > 这个命名规则来自 `Pipeline`，和 §4.5 自定义变换器的 `features` 参数一样，都是 sklearn 的"约定式接口"。
+
+### `run_tuning_depth.py` —— 调参：**把"过拟合"画成表格**
+
+```python
+BASE = ("QualArea", "TotalSF")
+DEPTHS = [2, 3, 4, 5, 6, 7, 8]
+
+
+def make_model(depth: int) -> CatBoostRegressor:
+    """把"只变 depth"这件事写成函数，避免各处参数抄漏。"""
+    return CatBoostRegressor(
+        iterations=300,
+        learning_rate=0.05,
+        depth=depth,
+        random_seed=42,
+        verbose=0,
+        allow_writing_files=False,
+    )
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `make_model(depth)` | **"参数 → 模型"的工厂函数**（对照实验的核心工具） |
+| `DEPTHS = [2, 3, ..., 8]` | 把"要扫哪些值"写成**列表**，循环时改一行就能扫别的范围 |
+| `f"{'depth':>5}"` | f-string 里塞**字符串字面量** + `>5` = **右对齐**、宽 5（数字贴右才上下整齐） |
+
+#### ⭐ 本文件最重要的两件事
+
+**① 工厂函数：让"只改一个变量"变成一行代码**
+
+```python
+    for d in DEPTHS:
+        mean, std = cv_rmse_log(
+            make_pipeline(make_model(d), X, derived_features=BASE), X, y, n_repeats=10
+        )
+```
+
+> 🧒 如果不用工厂函数，就要在循环里手写一长串 `CatBoostRegressor(iterations=300, ...)`，
+> 而且还容易**把某个参数抄漏或抄错**——那对照实验就废了（一次动了两个变量）。
+> 📌 调参脚本的固定写法：**`make_model(变化的参数)` + 循环扫值**。
+
+**② 同时打印"训练集 RMSE" → 让过拟合看得见**
+
+```python
+    y_log = np.log1p(y)          # 不变的计算提到循环外（别每轮重算）
+
+    for d in DEPTHS:
+        ...  # ① CV 分数
+
+        # ② 训练集拟合误差：看"模型有多会背"（诊断用）
+        pipe = make_pipeline(make_model(d), X, derived_features=BASE)
+        pipe.fit(X, y_log)
+        tr = rmse(y_log, pipe.predict(X))
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `np.log1p(y)` 写在循环外 | **不随循环变化的计算提到循环外**（循环里重算是白花时间） |
+| `pipe.fit(X, y_log)` 后 `pipe.predict(X)` | **先 fit 再对同一批数据预测** = 训练集误差（"开卷考"成绩） |
+
+> ⚠️ **训练集 RMSE 不是评估指标**！它只回答"模型有多会背",**永远**不能拿来选模型
+> （否则一定选出长满的决策树，实验 #8 就是这么差的）。
+> 🧒 但它**必须**和 CV 分数并排看：
+>
+> | 现象 | 含义 |
+> |---|---|
+> | 训练误差 ↓、CV 误差 ↓ | 还在"学"（复杂度不够） |
+> | 训练误差 ↓、CV 误差 ↑ | **开始"背"** → 过拟合（方差主导） |
+>
+> 实验 #18 里：训练 RMSE 从 0.10879 一路降到 0.06136（单调下降），而 CV 是 **U 形**，
+> 最低点落在 `depth=6` → 这就是**偏差-方差权衡**的实测曲线，不是背来的结论。
 
 ### `make_submission.py` 前半段 —— 全量训练 → `expm1` → 按 Id 对齐
 
