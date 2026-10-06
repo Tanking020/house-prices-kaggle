@@ -39,6 +39,9 @@
 | 2 | 9.27 | A 冒烟 | 再加 `GrLivArea`（其余不变） | **0.20491 ± 0.02230** | ↓ 0.026 | 加第 2 个特征仍有效 → **留下**；但标准差变大 = 对"验证集样本构成"更敏感，待特征工程阶段验证 |
 | 3 | 9.27 | A 尺子升级 | 尺子支持重复 K 折；用 **5×10** 复测同一模型（`OverallQual+GrLivArea`） | **0.20437 ± 0.01446** | ≈ 0 | 均值与单次 5 折几乎一致（0.2049→0.2044）→ 结论不变 |
 | 4 | 10.3 | B 基线 | **首个真正基线**：完整预处理（4 类填充 + One-Hot/Ordinal）装进 `Pipeline` + `Ridge(alpha=1)`；用 5×10 打分 | **0.14627 ± 0.02960** | ↓ 0.058 | 首个可用基线 → **留下**；量级与“顶尖约 0.11”一致，**无泄漏迹象**；单次 5 折为 0.14487（略偏乐观） |
+| 5 | 10.6 | C 特征工程 | 加派生特征 `TotalSF = TotalBsmtSF + 1stFlrSF + 2ndFlrSF`（新增 `AddDerivedFeatures` 变换器，流水线第 1 步） | **0.14627 ± 0.02960** | **0.00000** | **无增益 → 对线性模型不采用**。原因：`TotalSF` 是已有 3 列的**线性组合**，Ridge 本来就能表示它 → 信息量为零。对树模型才有价值（树不会自己"拼"特征），留到阶段 D 再验 |
+| 6 | 10.6 | C 特征工程 | 加交互项 `QualArea = OverallQual × GrLivArea`（并把派生特征改成**配方表 + 按名字启用**：`FEATURE_BUILDERS` + `AddDerivedFeatures(features=...)`） | **0.14383 ± 0.02699** | **↓ 0.00244** | **留下**（首个有效特征）。乘积**不在原列的张成空间里** → 线性模型吃到新信息；差异约为"换种子波动(0.0006)"的 4 倍，初步判定有效 |
+| 7 | 10.6 | C 特征工程 | **阈值型标志筛查**：以 `QualArea` 为参考，分别**单独**加 `HasPool`/`Has2ndFlr`/`HasBsmt`/`HasGarage`/`HasFireplace`（0/1） | 0.14369 ~ 0.14398（最好 `+HasPool` = 0.14369） | ≈ 0（≤ 0.00015） | **全部不采用**。① 3 个标志近似常数（`HasPool` 只 0.5% 为 1、`HasBsmt` 97.5%、`HasGarage` 94.5%）→ 零信息；② 另 2 个分布均衡（`Has2ndFlr` 43.2%、`HasFireplace` 52.7%）也没提升 → 该信息已隐含在原连续特征里，增益小于噪声 |
 | | | | | | | |
 
 > 💡 第 0~3 行只是**验证尺子**（用 sklearn 现成模型 + 2 个特征，不是正式建模）。
@@ -65,6 +68,7 @@
 | 9.27 | `MasVnrType` 一刀切当"无饰面" | 872 行缺失被全部填 `"None"` | 忽略了其中 5 行 `MasVnrArea > 0`（确实有饰面）属**真缺失** | 拆成 859 无饰面 / 5 真缺失 / 8 两列同缺，分别处理 |
 | 9.27 | 验证代码写在临时目录 | "我验证过了"但无法复现 | 脚本放 `%TEMP%` 且跑完就删 | 固定放进 `tests/`，任何人可重跑 |
 | 10.5 | Kaggle 网页提交页**没有上传框** | 提交页只显示 `Need help making a submission? Check out the Code and Discussion tabs for this competition.`，拖拽区不出来 | 网页上传控件未渲染（前端/网络问题，根因未定位） | **改用 Kaggle CLI 提交**：`kaggle auth login` → `kaggle competitions submit <slug> -f <csv> -m "<说明>"`，绕开网页且可复现 |
+| 10.6 | 自定义 Transformer 报 `input_features is not equal to feature_names_in_` | `Pipeline.get_feature_names_out()` 失败 | ① `fit` 里没登记 `feature_names_in_`；② `get_feature_names_out(None)` 实现错误（Pipeline 第一步会传 `None`） | `fit` 里手工登记 `n_features_in_` / `feature_names_in_`（不能用 `validate_data`，它会要求数值）；gfn 遇到 `None` 回退 `self.feature_names_in_` |
 
 ---
 
@@ -72,9 +76,11 @@
 
 > 想到但还没做的点子，先记下来，避免忘掉。
 
-- [ ] 目标做 `log1p`（EDA 已强烈支持，用 CV 验证是否真的降分）
-- [ ] 10 个有序评级列（`Ex>Gd>TA>Fa>Po`）→ 序数编码 0~4
+- [x] 目标做 `log1p` → **已实现**（`cv_rmse_log` 内部对目标做 log1p；基线 CV 0.14627）
+- [x] 10 个有序评级列（`Ex>Gd>TA>Fa>Po`）→ 序数编码 → **已实现**（B2 `build_encoder`，`QUALITY_ORDER` 映射 0~5）
 - [ ] 稀疏 0 列（`MiscVal` / `PoolArea` / `ScreenPorch`…）→ 转 0/1 标志
 - [ ] `Id` 524 / 1299 离群点是否剔除（**用 CV 验证**，别拍脑袋删）
 - [ ] `Neighborhood`(25) 高基数 → target encoding（注意 OOF 防泄漏）
 - [ ] 派生特征：总面积、房龄、卫浴总数
+- [ ] `MSSubClass`（15 个取值的"假数值"）→ 当类别处理
+- [ ] Ridge 预测上限 1,071,406 > 训练上限 755,000（**外推过头**）→ 加强正则化 / 换树模型

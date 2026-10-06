@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
@@ -100,31 +102,94 @@ def build_encoder(X) -> ColumnTransformer:
     return ct
 
 
-def build_preprocessor(X) -> Pipeline:
-    """把"填充 → 编码"串成一条预处理流水线。
+# —— 派生特征"配方表"：名字 → 怎么算 ——
+# 用字典把"特征名"和"算式"解耦：想试新特征，只在这里加一行；
+# 想开关某个特征，只要在特征名列表里增删即可 → 天然的 A/B 实验机制。
+FEATURE_BUILDERS = {
+    # 线性组合（总和）：对线性模型零增益，但对树模型有用
+    "TotalSF": lambda X: X["TotalBsmtSF"] + X["1stFlrSF"] + X["2ndFlrSF"],
+    # 交互项（乘积）：线性模型**无法**自己表示 → 能提供新信息
+    "QualArea": lambda X: X["OverallQual"] * X["GrLivArea"],
+    # —— 以下为"阈值型"特征：把连续值压成 0/1 ——
+    # 阈值化也是一种**非线性**变换（模型无法用线性组合造出">0"这种跳变）
+    "HasPool": lambda X: (X["PoolArea"] > 0).astype(int),
+    "Has2ndFlr": lambda X: (X["2ndFlrSF"] > 0).astype(int),
+    "HasBsmt": lambda X: (X["TotalBsmtSF"] > 0).astype(int),
+    "HasGarage": lambda X: (X["GarageArea"] > 0).astype(int),
+    "HasFireplace": lambda X: (X["Fireplaces"] > 0).astype(int),
+}
+
+
+class AddDerivedFeatures(BaseEstimator, TransformerMixin):
+    """按名字添加派生特征（纯函数变换：fit 不学习任何东西，无泄漏）。
+
+    参数 features：要添加哪些特征（名字取自 FEATURE_BUILDERS）。
+    传空 = 不加任何特征（A/B 实验的"基线"）。
+
+    ⚠️ 实验纪律：一次只开一个特征，用 CV 验证后再决定留不留。
+    """
+
+    def __init__(self, features=()):
+        self.features = features
+
+    def fit(self, X, y=None):
+        # 只登记列信息（feature_names_in_ / n_features_in_），不学习任何东西。
+        # ⚠️ 这一步必须做：sklearn 的 Pipeline 要靠它拼"特征名链条"。
+        # 注意：不能用 validate_data —— 它默认要求数值，而 X 里有字符串列；
+        # 这里只需手工登记两个属性即可。
+        self.n_features_in_ = X.shape[1]
+        if hasattr(X, "columns"):
+            self.feature_names_in_ = np.asarray(X.columns)
+        return self
+
+    def transform(self, X):
+        X = X.copy()                      # ⚠️ 绝不原地修改传进来的数据
+        for name in self.features:
+            X[name] = FEATURE_BUILDERS[name](X)
+        return X
+
+    def get_feature_names_out(self, input_features=None):
+        # 注意：Pipeline 第一步会传 input_features=None，
+        # 此时要回退到自己 fit 时登记的 feature_names_in_。
+        if input_features is None:
+            input_features = self.feature_names_in_
+        return np.array(list(input_features) + list(self.features))
+
+
+def build_preprocessor(X, derived_features: tuple = ()) -> Pipeline:
+    """把"（可选）派生特征 → 填充 → 编码"串成一条预处理流水线。
 
     只使用 X 的【列名/类型】来决定各步处理哪些列（不读数值），因此不构成泄漏。
     真正的统计量（中位数、众数、类别清单）都在 `fit` 时才学习。
+
+    derived_features：要启用的派生特征名（默认空 = 基线版，用于 A/B 对比）。
     """
-    return Pipeline(
-        [
-            ("impute", build_imputer(X)),
-            ("encode", build_encoder(X)),
-        ]
-    )
+    steps = []
+    if derived_features:
+        derive = AddDerivedFeatures(features=list(derived_features))
+        # 派生列只会【新增】列名：构造 imputer/encoder 时把新列名并入"列清单"
+        # （这里只看列名与类型，不读任何数值 → 无泄漏）
+        col_names = X.columns.tolist() + list(derived_features)
+        X_for_layout = X.reindex(columns=col_names)
+        steps.append(("derive", derive))
+    else:
+        X_for_layout = X
+
+    steps += [
+        ("impute", build_imputer(X_for_layout)),
+        ("encode", build_encoder(X_for_layout)),
+    ]
+    return Pipeline(steps)
 
 
-def make_pipeline(model, X) -> Pipeline:
+def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
     """完整流水线：预处理 + 模型。**直接丢进 CV 即可**。
 
-    用法
-    ----
-    >>> pipe = make_pipeline(Ridge(), X_train)
-    >>> mean, std = cv_rmse_log(pipe, X_train, y_train)
+    derived_features：要启用的派生特征（默认空 = 基线版），用于 A/B 对比。
     """
     return Pipeline(
         [
-            ("prep", build_preprocessor(X)),
+            ("prep", build_preprocessor(X, derived_features=derived_features)),
             ("model", model),
         ]
     )
