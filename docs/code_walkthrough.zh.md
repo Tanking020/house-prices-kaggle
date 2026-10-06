@@ -14,7 +14,7 @@
 | 1 | `src/house_prices/data.py` | §1.1 ~ §1.5 | ✅ |
 | 2 | `src/house_prices/evaluate.py` | §2.1 ~ §2.4 | ✅ |
 | 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.7 | ✅ |
-| 4 | `tests/*.py`（7 个脚本） | §5.0 ~ §5.4 | ✅ |
+| 4 | `tests/*.py`（10 个脚本） | §5.0 ~ §5.4 | ✅ |
 
 > 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §五 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
 > 每个小节的组织固定为：**它干什么 → 逐句讲 → 语法点表**。
@@ -31,8 +31,11 @@
 | `tests/smoke_preprocess.py` | ~45 行 | §5.1 + §5.2 |
 | `tests/smoke_encoder.py` | ~55 行 | §5.1 + §5.2 |
 | `tests/smoke_pipeline.py` | ~50 行 | §5.1 + §5.2 |
+| `tests/smoke_sklearn_concepts.py` | ~95 行 | §5.1 + §5.2 |
 | `tests/run_baseline.py` | ~45 行 | §5.1 + §5.2 |
-| `tests/run_experiment.py` | ~45 行 | §5.1 + §5.2 |
+| `tests/run_experiment.py` | ~55 行 | §5.1 + §5.2 |
+| `tests/run_model_experiment.py` | ~50 行 | §5.1 + §5.2 |
+| `tests/run_boosting_experiment.py` | ~100 行 | §5.1 + §5.2 |
 | `tests/make_submission.py` | ~65 行 | §5.1 + §5.2 |
 
 > ⚠️ `notebooks/*.ipynb` 是**探索性分析**，不是可复用代码；它内部自带中文说明，不在本文档范围内。
@@ -856,11 +859,14 @@ def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
 | `smoke_preprocess.py` | 冒烟：填充后有没有 NaN | ❌ |
 | `smoke_encoder.py` | 冒烟：编码后是不是全数字 | ❌ |
 | `smoke_pipeline.py` | 冒烟：整条流水线能否端到端跑通 | ❌ |
+| `smoke_sklearn_concepts.py` | 概念验证：`fit` 原地修改 / `clone` / `Pipeline` / 正则化 | 参考分数（不算实验） |
 | `run_baseline.py` | 基线实验：地板 vs Ridge | ✅ |
 | `run_experiment.py` | 特征工程 A/B 实验 | ✅ |
+| `run_model_experiment.py` | **模型升级**实验（换模型） | ✅ |
+| `run_boosting_experiment.py` | 三库对比（XGBoost / LightGBM / CatBoost）+ 树复杂度诊断 | ✅ |
 | `make_submission.py` | 生成提交文件 + 格式自检 | ❌ |
 
-## 5.1 公共骨架（7 个脚本几乎一样的部分）
+## 5.1 公共骨架（10 个脚本几乎一样的部分）
 
 ### ① 开头的文档字符串 —— 写清"怎么运行"
 
@@ -1047,6 +1053,139 @@ if __name__ == "__main__":
 >
 > 💡 `run_baseline.py` 用的是**同一个套路**，只是把候选换成三行：**地板 / Ridge(5 折) / Ridge(5×10)**，
 > 这样一屏就能看出"地板有多低、5 折与 5×10 差多少"。
+
+### `run_model_experiment.py` —— 换模型（只变"模型"这一个变量）
+
+```python
+    # 特征固定为"目前最好的一组"，只变模型 → 逐行可归因
+    BASE = ("QualArea", "TotalSF")
+
+    cases = {
+        "① Ridge(alpha=1)【线性参考】": (Ridge(alpha=1.0), BASE),
+        "② 随机森林(200 棵)【上轮赢家】": (
+            RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1),
+            BASE,
+        ),
+        "③ GBDT（默认 100 棵, lr=0.1）": (
+            GradientBoostingRegressor(random_state=42),
+            BASE,
+        ),
+        "④ GBDT（300 棵, lr=0.05）": (
+            GradientBoostingRegressor(
+                n_estimators=300, learning_rate=0.05, random_state=42
+            ),
+            BASE,
+        ),
+    }
+
+    for name, (model, feats) in cases.items():
+        pipe = make_pipeline(model, X, derived_features=feats)
+        mean, std = cv_rmse_log(pipe, X, y, n_repeats=10)
+        print(f"{name:32s} {mean:.5f} ± {std:.5f}")
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `for name, (model, feats) in cases.items():` | ⭐ **两级解包**：先解出 `name` 和元组，再把元组解成 `model` / `feats`（见 §〇 第 13 条） |
+| `RandomForestRegressor(..., n_jobs=-1)` | `n_jobs=-1` = **用上所有 CPU 核心**并行训练（`-1` 是"全部"的约定） |
+| `random_state=42` | 固定随机性 → 结果**可复现** |
+
+> 🧒 **树模型为什么不用标准化？** 它只做"大于/小于"比较，**不受量纲影响**（见 §〇 第 11 条的"向量化"同理，都属"算法特性决定预处理")。
+> ⚠️ 我们的流水线对树仍然做了 One-Hot 和填充 —— **One-Hot 对树不是必需的**（但无害）。
+> 这属于后续可优化项（记在 `experiments.md` 的待验证清单里）。
+
+### `run_boosting_experiment.py` —— 三库对比：**同样的算法，不同的库**
+
+```python
+from catboost import CatBoostRegressor
+from lightgbm import LGBMRegressor
+from xgboost import XGBRegressor
+```
+
+```python
+    cases = {
+        "① sklearn GBDT(300, lr=0.05)【上轮赢家·锚点】": (
+            GradientBoostingRegressor(
+                n_estimators=300, learning_rate=0.05, random_state=42
+            ),
+            BASE,
+        ),
+        ...
+    }
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `from catboost import CatBoostRegressor` | 第三方库的导入方式**和 sklearn 完全一样**（都是 `from 包 import 类`） |
+| 字典的**值又是一个元组** `(模型, 特征)` | 与 `run_model_experiment.py` 同一套路：两级解包 |
+
+#### ⭐ 本文件最重要的知识：**三个库的参数名不统一**
+
+| 含义 | sklearn | XGBoost | LightGBM | CatBoost |
+|---|---|---|---|---|
+| 树的数量 | `n_estimators` | `n_estimators` | `n_estimators` | **`iterations`** ⚠️ |
+| 随机种子 | `random_state` | `random_state` | `random_state` | **`random_seed`** ⚠️ |
+| 学习率 | `learning_rate` | `learning_rate` | `learning_rate` | `learning_rate` |
+| 单棵树最大深度 | `max_depth` | `max_depth` | `max_depth` | `depth` |
+| 静默训练日志 | — | `verbosity=0` | `verbose=-1` | `verbose=0` |
+| 不写日志文件 | — | — | — | **`allow_writing_files=False`** |
+
+> ⚠️ **传错参数名不会报错！** sklearn 风格的估计器普遍接受 `**kwargs`，写错的参数会被**静默吞掉**，
+> 于是你以为改了参数、其实**根本没生效**。→ 换库时第一件事是**查它自己的参数名**。
+
+#### ⭐ 第二个知识点：为什么脚本要分"两轮"
+
+```python
+    # ---- 第二轮：诊断"为什么 XGBoost / LightGBM 反而更差" ----
+    # 假设：sklearn GBDT 默认 max_depth=3（浅树）；XGBoost 默认 max_depth=6 → 过拟合。
+    # 验证方法：只把"树复杂度"压到 3 层，其它一律不动，看分数是否追回来。
+    depth_cases = { ... }
+```
+
+> 🧒 **这叫"控制变量 + 提出假设 + 验证假设"**，是实验的核心方法论：
+> 第一轮发现"XGBoost 更差"只是**现象**；第二轮**只改树复杂度**去验证"是不是默认树太深"，
+> 才能得到**可复用的结论**（阶段 E 就照这个方向调参），而不是误以为"这个库没用"。
+>
+> 📌 结果记在 `experiments.md` 的 #16 / #17：压到 3 层后 XGBoost 从 0.13019 → 0.12568（追平锚点）
+> → **结论：差在树复杂度，不在库**。
+
+### `smoke_sklearn_concepts.py` —— 用实验验证四个"框架级"概念
+
+```python
+X = np.array([[1.0], [2.0], [3.0]])
+y = np.array([2.0, 4.0, 6.0])  # 真实关系 y = 2x
+
+def main() -> None:
+    for name, mdl in [
+        ("Ridge(alpha=1.0)", Ridge(alpha=1.0)),
+        ("Ridge(alpha=0.0)", Ridge(alpha=0.0)),  # alpha=0 等价普通最小二乘
+        ("LinearRegression", LinearRegression()),
+    ]:
+        mdl.fit(X, y)
+        print(f"  {name:18s} coef_={mdl.coef_} intercept_={mdl.intercept_:.4f}")
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `for name, mdl in [(名字, 模型), ...]:` | 列表里放元组 + 双层解包（同 §5.2 其它脚本） |
+| `id(m)` | 取对象的**内存地址**（身份标识）；`id` 变=换了对象，不变=同一个对象 |
+| `hasattr(m, 'coef_')` | 判断对象**有没有这个属性**（未训练时没有 `coef_`） |
+| `alpha=0.0` | Ridge 的正则化强度；`0` = 不平正则 → 退化成 OLS |
+
+#### ⭐ 它验证的四个概念（都是"框架怎么用"而非"算法怎么算"）
+
+| # | 概念 | 本脚本给出的证据 |
+|---|---|---|
+| 0 | **正则化的作用** | 同样 `y=2x`：`Ridge(alpha=1)` 学到 `coef_=1.333`、`alpha=0` / `LinearRegression` 学到 `2.0` → **alpha 越大，系数被压得越小**（这就是"防止系数过大"的直观效果） |
+| 1 | **`fit` 是原地修改对象** | `Ridge(alpha=1)` fit 前没有 `coef_`，fit 后有了；**`id` 不变** → 不是"返回一个新模型"，而是**把原对象改了** |
+| 2 | **`clone` 只复制配置** | `clone(m)` 后副本 `alpha` 保留（超参数），但 `coef_` **不存在**（训练状态被清空） → 所以 `cv_rmse_log` 每折都 `clone(model)`，保证**每折从零开始、互不污染** |
+| 3 | **`Pipeline` 是一个"复合对象"** | `named_steps` 按名字取步骤；`set_params(model__alpha=10.0)` 用 **双下划线**层层定位参数；`clone(pipe)` 保留步骤结构 |
+
+> 🧒 **为什么值得单独写个脚本？** 因为 `cv_rmse_log` 里那句 `clone(model)`、以及 §4.6 里用 `set_params` 调参，
+> 都属于"**不验证就等于没懂**"的框架行为。这个脚本让它们**看得见、可复现**（而不是"面试时背概念"）。
+>
+> ⚠️ 注意 `set_params(model__alpha=...)` 里的 `model__` 就是**步骤名 + 双下划线 + 参数名**，
+> 这个命名规则来自 `Pipeline`，和 §4.5 自定义变换器的 `features` 参数一样，都是 sklearn 的"约定式接口"。
 
 ### `make_submission.py` 前半段 —— 全量训练 → `expm1` → 按 Id 对齐
 
