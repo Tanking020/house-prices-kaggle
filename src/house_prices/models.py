@@ -14,8 +14,9 @@
 | `learning_rate` | 0.025 | 实验 #19：3×3 网格最低点（"学习率越小越好"，但收益递减） |
 | `iterations` | 1200 | 实验 #19：与学习率**耦合**，300 轮时明显欠训练 |
 | 特征配方 | `QualArea` + `TotalSF` | 实验 #6（交互项对线性模型有效）、#10（`TotalSF` 对树模型翻案） |
+| 目标编码列 | `Neighborhood` | 实验 #27（筛选 −0.00264）、#28（5×10 确认 **−0.00226**，标准差同时降低） |
 
-当前 CV = **0.11993**（5×10 折重复交叉验证，实验 #19/#20）。
+当前 CV = **0.11767**（5×10 折重复交叉验证，实验 #28）。
 """
 from __future__ import annotations
 
@@ -23,6 +24,10 @@ from catboost import CatBoostRegressor
 
 # —— 特征配方：要启用的派生特征名（算式见 `preprocess.FEATURE_BUILDERS`）——
 BEST_DERIVED_FEATURES = ("QualArea", "TotalSF")
+
+# —— 目标编码列（OOF + 平滑，见 `preprocess.OofTargetEncoder`）——
+# 只放 Neighborhood：实验 #28 显示再加 MSSubClass 反而略差（0.11803 vs 0.11767）
+BEST_TARGET_ENCODE = ("Neighborhood",)
 
 # —— 超参数：来自阶段 E 的实验结论 ——
 BEST_PARAMS = dict(

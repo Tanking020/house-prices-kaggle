@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
@@ -169,6 +171,87 @@ class AddDerivedFeatures(BaseEstimator, TransformerMixin):
         return np.array(list(input_features) + list(self.features))
 
 
+class OofTargetEncoder(BaseEstimator, TransformerMixin):
+    """目标编码：把类别列换成"该类别的平均 log 价格"（**OOF + 平滑**）。
+
+    ⚠️ 必须解决的两个问题（这也是目标编码最容易翻车的地方）：
+
+    ① **跨折泄漏**：编码统计量里绝不能出现验证集的 y。
+       → 本类做成 Pipeline 的一步，`fit` 只会见到**训练折**，天然安全。
+
+    ② **折内过拟合**：如果"用训练折全部行算均值，再拿它训练同一批行"，
+       那么每一行的编码里**包含了它自己的 y** → 模型会过度信任这个特征
+       （训练集上虚好、验证集上崩）。
+       → `fit_transform` 内部**再做一层 K 折**：第 i 折的编码只用【其余折】算出来。
+
+    **平滑**：类别样本少时均值极不稳定（`Neighborhood=Blueste` 只有 2 套房）。
+       encoded = (n * mean_c + m * prior) / (n + m)
+       n=0 → 完全用 prior（全局均值）；n 很大 → 接近该类别自己的均值。
+       m = `smoothing`（"先验相当于多少条虚拟样本"）。
+
+    `transform`（新数据/验证集/测试集）用的则是**全量训练数据**算出的平滑均值。
+
+    📌 sklearn ≥1.3 有内置的 `sklearn.preprocessing.TargetEncoder`（同样带交叉拟合）。
+       这里自己写一遍是为了**看清机制**；工程上可以直接用内置的。
+    """
+
+    def __init__(self, columns=(), n_splits=5, smoothing=10.0, seed=42):
+        self.columns = columns
+        self.n_splits = n_splits
+        self.smoothing = smoothing
+        self.seed = seed
+
+    # ---- 内部：算"平滑后的类别均值" ----
+    def _smoothed_means(self, col, y) -> dict:
+        values = np.asarray(col)
+        out: dict = {}
+        for cat in np.unique(values):
+            mask = values == cat
+            n = int(mask.sum())
+            mean = float(y[mask].mean())
+            out[cat] = (n * mean + self.smoothing * self.prior_) / (n + self.smoothing)
+        return out
+
+    def fit(self, X, y):
+        y = np.asarray(y, dtype=float)
+        # 手工登记 sklearn 约定属性（不能用 validate_data，它会要求全数值）
+        self.feature_names_in_ = np.asarray(X.columns, dtype=object)
+        self.n_features_in_ = X.shape[1]
+        self.prior_ = float(np.mean(y))
+        self.mapping_ = {c: self._smoothed_means(X[c], y) for c in self.columns}
+        return self
+
+    def fit_transform(self, X, y=None, **fit_params):
+        """训练数据走这里：内部 K 折 → 每行的编码只用别的行算。"""
+        if y is None:
+            raise ValueError("OofTargetEncoder 需要 y（目标编码必须用到目标）")
+        self.fit(X, y)
+        y_arr = np.asarray(y, dtype=float)
+        X_out = X.copy()
+
+        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=self.seed)
+        for c in self.columns:
+            oof = pd.Series(np.nan, index=X.index, dtype=float)
+            for tr_idx, va_idx in kf.split(X):
+                means = self._smoothed_means(X[c].iloc[tr_idx], y_arr[tr_idx])
+                oof.iloc[va_idx] = X[c].iloc[va_idx].map(means).to_numpy()
+            # 该折里没见过的类别 → 回退全局均值
+            X_out[c] = oof.fillna(self.prior_).astype(float)
+        return X_out
+
+    def transform(self, X):
+        X_out = X.copy()
+        for c in self.columns:
+            mapped = X[c].map(self.mapping_[c]).astype(float)
+            X_out[c] = mapped.fillna(self.prior_)      # 训练集没见过的类别 → 全局均值
+        return X_out
+
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None:
+            input_features = self.feature_names_in_
+        return np.asarray(input_features, dtype=object)
+
+
 def cat_feature_names(X) -> list[str]:
     """列出所有【类别型】列名（= 非数值列）。
 
@@ -179,16 +262,19 @@ def cat_feature_names(X) -> list[str]:
     return X.select_dtypes(exclude="number").columns.tolist()
 
 
-def build_preprocessor(X, derived_features: tuple = (), encode: bool = True) -> Pipeline:
-    """把"（可选）派生特征 → 填充 → （可选）编码"串成一条预处理流水线。
+def build_preprocessor(X, derived_features: tuple = (), encode: bool = True,
+                       target_encode: tuple = ()) -> Pipeline:
+    """把"（可选）派生特征 → 填充 → （可选）目标编码 → （可选）编码"串成流水线。
 
     只使用 X 的【列名/类型】来决定各步处理哪些列（不读数值），因此不构成泄漏。
-    真正的统计量（中位数、众数、类别清单）都在 `fit` 时才学习。
+    真正的统计量（中位数、众数、类别清单、目标均值）都在 `fit` 时才学习。
 
     derived_features：要启用的派生特征名（默认空 = 基线版，用于 A/B 对比）。
     encode=False：**跳过编码**，只保留填充 → 给 CatBoost 这类
         "能自己处理原始类别列"的模型用（它需要看到原始字符串，而不是 One-Hot 后的 0/1）。
         ⚠️ 此时必须把类别列名通过模型的 `cat_features=...` 告诉它，否则模型会报错。
+    target_encode：对哪些类别列做**目标编码**（OOF + 平滑，见 `OofTargetEncoder`）。
+        这些列会在填充之后被换成数值，因此编码阶段会当作**数值透传**（不再 One-Hot）。
     """
     steps = []
     if derived_features:
@@ -202,22 +288,39 @@ def build_preprocessor(X, derived_features: tuple = (), encode: bool = True) -> 
         X_for_layout = X
 
     steps.append(("impute", build_imputer(X_for_layout)))
+
+    if target_encode:
+        steps.append(("target_encode",
+                      OofTargetEncoder(columns=tuple(target_encode))))
+
     if encode:
-        steps.append(("encode", build_encoder(X_for_layout)))
+        if target_encode:
+            # 构造"布局"副本：把目标编码列**假装成数值**，让编码器把它们当数值透传，
+            # 而不是再 One-Hot 一遍（否则会重复表达同一信息）。
+            # ⚠️ 这里只改 dtype、**不读任何数值** —— ColumnTransformer 只按列名与类型派活。
+            X_layout = X_for_layout.copy()
+            for c in target_encode:
+                if c in X_layout.columns:
+                    X_layout[c] = pd.Series(0.0, index=X_layout.index)
+        else:
+            X_layout = X_for_layout
+        steps.append(("encode", build_encoder(X_layout)))
     return Pipeline(steps)
 
 
 def make_pipeline(model, X, derived_features: tuple = (),
-                  encode: bool = True) -> Pipeline:
+                  encode: bool = True, target_encode: tuple = ()) -> Pipeline:
     """完整流水线：预处理 + 模型。**直接丢进 CV 即可**。
 
     derived_features：要启用的派生特征（默认空 = 基线版），用于 A/B 对比。
     encode=False：跳过 One-Hot/Ordinal 编码（见 `build_preprocessor`）。
+    target_encode：对哪些类别列做目标编码（OOF + 平滑）。
     """
     return Pipeline(
         [
             ("prep", build_preprocessor(
-                X, derived_features=derived_features, encode=encode
+                X, derived_features=derived_features,
+                encode=encode, target_encode=target_encode,
             )),
             ("model", model),
         ]

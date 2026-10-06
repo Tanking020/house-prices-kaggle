@@ -13,9 +13,9 @@
 | 0 | `src/house_prices/__init__.py` | §1.0 | ✅ |
 | 1 | `src/house_prices/data.py` | §1.1 ~ §1.5 | ✅ |
 | 2 | `src/house_prices/evaluate.py` | §2.1 ~ §2.4 | ✅ |
-| 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.7 | ✅ |
+| 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.8 | ✅ |
 | 4 | `src/house_prices/models.py` | §六 | ✅ |
-| 5 | `tests/*.py`（16 个脚本） | §5.0 ~ §5.4 | ✅ |
+| 5 | `tests/*.py`（18 个脚本） | §5.0 ~ §5.4 | ✅ |
 
 > 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §六 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
 > 每个小节的组织固定为：**它干什么 → 逐句讲 → 语法点表**。
@@ -27,7 +27,7 @@
 | `src/house_prices/__init__.py` | ~10 行 | §1.0 |
 | `src/house_prices/data.py` | ~35 行 | §1.1 ~ §1.5 |
 | `src/house_prices/evaluate.py` | ~90 行 | §2.1 ~ §2.4 |
-| `src/house_prices/preprocess.py` | ~220 行 | §4.0 ~ §4.7 |
+| `src/house_prices/preprocess.py` | ~330 行 | §4.0 ~ §4.8 |
 | `src/house_prices/models.py` | ~45 行 | §六 |
 | `tests/smoke_evaluate.py` | ~50 行 | §5.1 + §5.2 |
 | `tests/smoke_preprocess.py` | ~45 行 | §5.1 + §5.2 |
@@ -46,6 +46,8 @@
 | `tests/run_blend.py` | ~130 行 | §5.1 + §5.2 |
 | `tests/run_stacking.py` | ~130 行 | §5.1 + §5.2 |
 | `tests/run_feature_extra.py` | ~80 行 | §5.1 + §5.2 |
+| `tests/smoke_target_encoder.py` | ~95 行 | §5.1 + §5.2 |
+| `tests/run_target_encoding.py` | ~80 行 | §5.1 + §5.2 |
 | `tests/make_submission.py` | ~65 行 | §5.1 + §5.2 |
 
 > ⚠️ `notebooks/*.ipynb` 是**探索性分析**，不是可复用代码；它内部自带中文说明，不在本文档范围内。
@@ -914,7 +916,81 @@ def make_pipeline(model, X, derived_features: tuple = (),
 | `derived_features=derived_features` | **关键字传参**：把本函数的参数透传给内层函数（名字一样，但必须显式写） |
 | **参数逐层透传** | `encode` 从 `make_pipeline` 一路传到 `build_preprocessor`（参数名保持一致才好传） |
 
-## 4.7 本部分语法索引
+## 4.7 `OofTargetEncoder` —— 目标编码（**本项目最“危险”的一个变换器**）
+
+### 它要解决什么问题？
+
+> 🧒 树当然能用 One-Hot 后的 `Neighborhood` 列去切分，但 **25 个 0/1 列**
+> 要表达出“这个街区整体贵不贵”，需要**很多次**切分才凑得出来 → 效率极低。
+> 目标编码把它压成**一个数值**（“该街区的平均 log 房价”）→ 树**一次切分**就能用上。
+> 📈 实验 #28：CV 从 0.11993 → **0.11767**（−0.00226，且标准差同时下降）。
+
+### ⚠️ 为什么它容易翻车？两个必须解决的问题
+
+| 问题 | 现象 | 解法 |
+|---|---|---|
+| ① **跨折泄漏** | 编码统计量里出现了验证集的 y | 做成 Pipeline 的一步 → `fit` 只见到**训练折**（架构天然保证） |
+| ② **折内过拟合** | 用训练折**全部**行算均值再拿它训练同一批行 → 每行的编码里**包含自己的 y** → 模型过度信任该特征（训练集虚好、验证集崩） | `fit_transform` 内部**再做一层 K 折**（OOF） |
+
+### 逐句讲
+
+```python
+    def _smoothed_means(self, col, y) -> dict:
+        values = np.asarray(col)
+        out: dict = {}
+        for cat in np.unique(values):
+            mask = values == cat
+            n = int(mask.sum())
+            mean = float(y[mask].mean())
+            out[cat] = (n * mean + self.smoothing * self.prior_) / (n + self.smoothing)
+        return out
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `np.unique(values)` | 取出所有**去重后的取值**（即“有哪些类别”） |
+| `values == cat` | 得到一个**布尔数组**（哪些行是这个类别） |
+| `y[mask]` | **布尔索引**：取布尔数组为 True 的那些元素 |
+| `(n*mean + m*prior)/(n+m)` | **平滑公式**：n=0 → 完全用 prior；n 很大 → 接近该类别自己的均值 |
+
+> 🧒 **需要平滑的实例**：`Neighborhood` 共 25 类，**最少的一类只有 2 套房**、最多的有 225 套。
+> 只有 2 套时直接取均值 = “这两套房的平均价”—— 极不稳定。
+> 平滑的意思就是“**向全局均值收缩**”：样本少就多听全局的，样本多才听自己的。
+
+```python
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X, y)
+        y_arr = np.asarray(y, dtype=float)
+        X_out = X.copy()
+
+        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=self.seed)
+        for c in self.columns:
+            oof = pd.Series(np.nan, index=X.index, dtype=float)
+            for tr_idx, va_idx in kf.split(X):
+                means = self._smoothed_means(X[c].iloc[tr_idx], y_arr[tr_idx])
+                oof.iloc[va_idx] = X[c].iloc[va_idx].map(means).to_numpy()
+            X_out[c] = oof.fillna(self.prior_).astype(float)
+        return X_out
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **重写 `fit_transform`** | ⚠️ 默认实现是 `fit(X,y).transform(X)` —— 那样就**没做 OOF**。要隔离，必须自己重写。`Pipeline` 在训练时调的正是 `fit_transform` |
+| `**fit_params` | 多出来的关键字参数**统统收下**（保持 sklearn 接口兼容） |
+| `Series.map(字典)` | 按字典把每个值**查表替换**；查不到变 `NaN` |
+| `.fillna(self.prior_)` | 该折里没见过的类别 → 回退全局均值 |
+| `**.to_numpy()`** | `map` 的结果先转成数组再赋给 `oof.iloc[va_idx]`（按**位置**写入） |
+
+> ⭐ **怎么证明自己写对了？** 靠一条**可精确检验**的性质（见 `tests/smoke_target_encoder.py` ①）：
+> **只出现 1 次的类别，它的 OOF 编码必须恰等于全局均值** ——
+> 因为做 OOF 时这一行会被留出，训练部分里该类别 0 条 → 公式退化成 prior。
+> 若实现里没做 OOF，这个值会变成“它自己的 y”，几乎必然 ≠ prior → **一行就戳破**。
+> 📌 这个思路值得学：**别靠“分数看起来对不对”判断有没有泄漏，要靠数学上必然成立的性质。**
+
+> 📌 **工程上可以直接用库**：sklearn ≥1.3 内置了 `sklearn.preprocessing.TargetEncoder`（同样带交叉拟合）。
+> 这里自己写一遍是为了**看清机制**；面试时能讲清“为什么必须 OOF、为什么必须平滑”比会用 API 更值钱。
+
+## 4.8 本部分语法索引
 
 本部分（`preprocess.py`）涉及的语法都已在正文讲过 → 汇总见 **§〇 语法总索引**（第 21~40 条），此处**不再重复**。
 
@@ -952,9 +1028,11 @@ def make_pipeline(model, X, derived_features: tuple = (),
 | `run_blend.py` | **融合 F-1**：加权平均（OOF 评估 + 误差相关矩阵 + 权重网格） | ✅ |
 | `run_stacking.py` | **融合 F-2**：Stacking（嵌套 CV，元特征零泄漏） | ✅ |
 | `run_feature_extra.py` | **补特征**：候选特征体检 + 单个特征 A/B 筛选 | ✅ |
+| `smoke_target_encoder.py` | 冒烟：目标编码的 **OOF 是否真生效**（可精确检验的三条性质） | ❌ |
+| `run_target_encoding.py` | **补特征**：目标编码 A/B（Neighborhood / MSSubClass） | ✅ |
 | `make_submission.py` | 生成提交文件 + 格式自检 | ❌ |
 
-## 5.1 公共骨架（16 个脚本几乎一样的部分）
+## 5.1 公共骨架（18 个脚本几乎一样的部分）
 
 ### ① 开头的文档字符串 —— 写清"怎么运行"
 
@@ -1785,6 +1863,44 @@ REPEATS = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 > `HouseAge` 与目标相关 −0.587 却完全没用，而相关只有 −0.074 的 `IsRemodeled` 反而略有效。
 > 🧒 **所以体检只能当“参考”，最终还是要用 CV 说话。**
 
+### `smoke_target_encoder.py` + `run_target_encoding.py` —— 目标编码的“验证”与“实验”
+
+> 🧒 **为什么这两件事要分开写两个脚本？**
+> **冒烟测试**回答“我实现对了吗”（不靠分数，靠数学性质）；
+> **实验脚本**回答“它值不值”（靠 CV 分数）。两件事混在一起，出了 bug 会误以为是“特征没用”。
+
+```python
+    # smoke_target_encoder.py 的核心断言（可精确检验）
+    a_oof = float(X_oof.loc[0, "City"])          # 只出现 1 次的那个类别
+    ok1 = bool(np.isclose(a_oof, prior, atol=1e-9))
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `X_oof.loc[0, "City"]` | **按标签 + 列名**取值（`loc` 用名字，`iloc` 用位置） |
+| `np.isclose(a, b, atol=1e-9)` | ⚠️ 浮点数**别用 `==`**；这里用“差值小于 1e-9”判断相等 |
+
+> ⭐ **这是本脚本最值钱的地方**：不靠“分数看起来对不对”（那是主观的），
+> 而靠**数学上必然成立的性质**（单样本类别的 OOF 编码必等于 prior）来判定实现对不对。
+> 泄漏往往表现为“分数变好了”—— 只盯分数永远发现不了。
+
+```python
+    # run_target_encoding.py：三组对照
+CASES = [
+    ("参考（不做目标编码）", ()),
+    ("+ 目标编码 Neighborhood", ("Neighborhood",)),
+    ("+ 目标编码 + MSSubClass", ("Neighborhood", "MSSubClass")),
+]
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `()` | **空元组** = “不做目标编码”（与“传一个空列表”不是一个意思，这里刻意用元组） |
+| 元组列表 | 同 §5.2 其它脚本的“表格化”写法，加一行就多一个候选 |
+
+> 📌 先跑冒烟把 bug 挡在门外，再用两个便宜→贵的尺子跑实验——
+> 这套“**先验证实现，再验证价值**”的顺序，是目标编码这种高风险特征的标准做法。
+
 ### `make_submission.py` 前半段 —— 全量训练 → `expm1` → 按 Id 对齐
 
 ```python
@@ -1947,4 +2063,4 @@ def make_best_model() -> CatBoostRegressor:
 | 3 | `src/house_prices/evaluate.py` | ✅ |
 | 4 | `src/house_prices/preprocess.py` | ✅ |
 | 5 | `src/house_prices/models.py` | ✅ |
-| 6 | `tests/*.py`（16 个脚本） | ✅ |
+| 6 | `tests/*.py`（18 个脚本） | ✅ |

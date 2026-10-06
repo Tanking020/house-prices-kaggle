@@ -25,7 +25,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from house_prices.data import RAW_DIR, get_xy, load_raw            # noqa: E402
-from house_prices.models import BEST_DERIVED_FEATURES, make_best_model  # noqa: E402
+from house_prices.models import (                                   # noqa: E402
+    BEST_DERIVED_FEATURES,
+    BEST_TARGET_ENCODE,
+    make_best_model,
+)
 from house_prices.preprocess import make_pipeline                  # noqa: E402
 
 # 命令行第 1 个参数 = 版本号（不写就是 v2）；sys.argv[0] 是脚本名
@@ -40,7 +44,9 @@ def main() -> None:
     # ---- 1) 用【全量】train 训练（提交时不再留验证集）----
     # 模型与特征配方都从 src/house_prices/models.py 取（单一事实来源）
     pipe = make_pipeline(
-        make_best_model(), X, derived_features=BEST_DERIVED_FEATURES
+        make_best_model(), X,
+        derived_features=BEST_DERIVED_FEATURES,
+        target_encode=BEST_TARGET_ENCODE,
     )
     pipe.fit(X, np.log1p(y))                 # 目标在 log 空间训练
 
