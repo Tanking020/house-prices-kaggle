@@ -156,13 +156,26 @@ class AddDerivedFeatures(BaseEstimator, TransformerMixin):
         return np.array(list(input_features) + list(self.features))
 
 
-def build_preprocessor(X, derived_features: tuple = ()) -> Pipeline:
-    """把"（可选）派生特征 → 填充 → 编码"串成一条预处理流水线。
+def cat_feature_names(X) -> list[str]:
+    """列出所有【类别型】列名（= 非数值列）。
+
+    用途：有些库（如 CatBoost）不需要先做 One-Hot，而是**直接吃原始类别列**，
+    此时要把这 43（或加上 MSSubClass 就 44）列的列名告诉它。
+    只读列名/类型，不读数值 → 不构成泄漏。
+    """
+    return X.select_dtypes(exclude="number").columns.tolist()
+
+
+def build_preprocessor(X, derived_features: tuple = (), encode: bool = True) -> Pipeline:
+    """把"（可选）派生特征 → 填充 → （可选）编码"串成一条预处理流水线。
 
     只使用 X 的【列名/类型】来决定各步处理哪些列（不读数值），因此不构成泄漏。
     真正的统计量（中位数、众数、类别清单）都在 `fit` 时才学习。
 
     derived_features：要启用的派生特征名（默认空 = 基线版，用于 A/B 对比）。
+    encode=False：**跳过编码**，只保留填充 → 给 CatBoost 这类
+        "能自己处理原始类别列"的模型用（它需要看到原始字符串，而不是 One-Hot 后的 0/1）。
+        ⚠️ 此时必须把类别列名通过模型的 `cat_features=...` 告诉它，否则模型会报错。
     """
     steps = []
     if derived_features:
@@ -175,21 +188,24 @@ def build_preprocessor(X, derived_features: tuple = ()) -> Pipeline:
     else:
         X_for_layout = X
 
-    steps += [
-        ("impute", build_imputer(X_for_layout)),
-        ("encode", build_encoder(X_for_layout)),
-    ]
+    steps.append(("impute", build_imputer(X_for_layout)))
+    if encode:
+        steps.append(("encode", build_encoder(X_for_layout)))
     return Pipeline(steps)
 
 
-def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
+def make_pipeline(model, X, derived_features: tuple = (),
+                  encode: bool = True) -> Pipeline:
     """完整流水线：预处理 + 模型。**直接丢进 CV 即可**。
 
     derived_features：要启用的派生特征（默认空 = 基线版），用于 A/B 对比。
+    encode=False：跳过 One-Hot/Ordinal 编码（见 `build_preprocessor`）。
     """
     return Pipeline(
         [
-            ("prep", build_preprocessor(X, derived_features=derived_features)),
+            ("prep", build_preprocessor(
+                X, derived_features=derived_features, encode=encode
+            )),
             ("model", model),
         ]
     )

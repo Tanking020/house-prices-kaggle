@@ -14,7 +14,7 @@
 | 1 | `src/house_prices/data.py` | §1.1 ~ §1.5 | ✅ |
 | 2 | `src/house_prices/evaluate.py` | §2.1 ~ §2.4 | ✅ |
 | 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.7 | ✅ |
-| 4 | `tests/*.py`（13 个脚本） | §5.0 ~ §5.4 | ✅ |
+| 4 | `tests/*.py`（15 个脚本） | §5.0 ~ §5.4 | ✅ |
 
 > 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §五 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
 > 每个小节的组织固定为：**它干什么 → 逐句讲 → 语法点表**。
@@ -32,6 +32,7 @@
 | `tests/smoke_encoder.py` | ~55 行 | §5.1 + §5.2 |
 | `tests/smoke_pipeline.py` | ~50 行 | §5.1 + §5.2 |
 | `tests/smoke_sklearn_concepts.py` | ~95 行 | §5.1 + §5.2 |
+| `tests/smoke_catboost_native.py` | ~100 行 | §5.1 + §5.2 |
 | `tests/run_baseline.py` | ~45 行 | §5.1 + §5.2 |
 | `tests/run_experiment.py` | ~55 行 | §5.1 + §5.2 |
 | `tests/run_model_experiment.py` | ~50 行 | §5.1 + §5.2 |
@@ -39,6 +40,7 @@
 | `tests/run_tuning_depth.py` | ~70 行 | §5.1 + §5.2 |
 | `tests/run_tuning_lr_iters.py` | ~110 行 | §5.1 + §5.2 |
 | `tests/run_tuning_seed_check.py` | ~90 行 | §5.1 + §5.2 |
+| `tests/run_catboost_native.py` | ~80 行 | §5.1 + §5.2 |
 | `tests/make_submission.py` | ~65 行 | §5.1 + §5.2 |
 
 > ⚠️ `notebooks/*.ipynb` 是**探索性分析**，不是可复用代码；它内部自带中文说明，不在本文档范围内。
@@ -88,7 +90,7 @@
 | 34 | `df["新列"] = ...` | §4.5 | 列赋值（不存在 = 新增） |
 | 35 | `list(a) + list(b)` | §4.5 | 列表拼接 |
 | 36 | **"假值"**：`()` `[]` `""` `0` `None` | §4.6 | 空容器在 `if` 里为假 |
-| 37 | `steps += [...]` | §4.6 | 列表原地扩展 |
+| 37 | 可选步骤 `if 开关: steps.append(...)` | §4.6 | 让流水线里的某一步**可开关**（如 `encode=True/False`） |
 | 38 | `df.reindex(columns=...)` | §4.6 | 重排 / 新增列 |
 | 39 | **嵌套 Pipeline** | §4.6 | Pipeline 里装 Pipeline |
 | 40 | 关键字传参 `f(a=a)` | §4.6 | 显式透传参数 |
@@ -106,6 +108,13 @@
 | 52 | **元组当字典键** `d[(lr, iters)]` | §5.2 | 元组不可变 → 可以当键；用来表示“多个参数的组合” |
 | 53 | `min(...)` / `sorted(..., key=lambda k: ...)` | §5.2 | 按“某个函数的结果”取最小 / 排序 |
 | 54 | `1e-6` 科学计数法；浮点数别用 `==` 比 | §5.2 | `0.025*1200` 不精确等于 `30` → 用容差判断 |
+| 55 | `try: ... except Exception as exc:` + `type(exc).__name__` | §5.2 | 捕获异常并看它的**类型**（诊断/健壮性） |
+| 56 | `dict(**BASE, k=v)` —— `**` 字典解包 | §5.2 | 在基础配置上“加/覆盖”几个参数 |
+| 57 | `x is None`（而不是 `== None`） | §5.2 | 判“没给/空”的标准写法（None 是单例） |
+| 58 | `np.all(np.isfinite(a))` | §5.2 | 数组里是否**全是有限数**（无 NaN/inf） |
+| 59 | **`sys.argv`** + `len(sys.argv) > 1` | §5.2 | 读**命令行参数**（`argv[0]` 是脚本名） |
+| 60 | `time.perf_counter()` | §5.2 | 高精度**计时器**；两次相减 = 耗时 |
+| 61 | `X.assign(列=新值)` + `.astype(str)` | §5.2 | 返回“改了一列的新表”（不就地改）；转字符串 |
 
 ---
 
@@ -788,8 +797,28 @@ class AddDerivedFeatures(BaseEstimator, TransformerMixin):
 
 ## 4.6 `build_preprocessor` / `make_pipeline` —— 组装
 
+### 先看一个小工具：`cat_feature_names`
+
 ```python
-def build_preprocessor(X, derived_features: tuple = ()) -> Pipeline:
+def cat_feature_names(X) -> list[str]:
+    """列出所有【类别型】列名（= 非数值列）。"""
+    return X.select_dtypes(exclude="number").columns.tolist()
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `select_dtypes(exclude="number")` | 按 **dtype** 选列：排除所有数值型 → 剩下就是类别列 |
+| `.columns.tolist()` | 把列名（`Index` 对象）变成普通列表 |
+
+> 🧒 **为什么要单独搞个函数？**
+> 我们一直以来的做法是 **One-Hot**：43 个类别列 → 两百多列 0/1（又稀又大）。
+> 但 CatBoost **不需要** One-Hot —— 它直接吃原始字符串列，只要告诉它“这 43 列是类别”就行。
+> 这个函数负责算出“是哪 43 列”（**只读列名/类型，不读数值 → 不构成泄漏**）。
+
+### 主流水线：`build_preprocessor` / `make_pipeline`
+
+```python
+def build_preprocessor(X, derived_features: tuple = (), encode: bool = True) -> Pipeline:
     steps = []
     if derived_features:
         derive = AddDerivedFeatures(features=list(derived_features))
@@ -799,10 +828,9 @@ def build_preprocessor(X, derived_features: tuple = ()) -> Pipeline:
     else:
         X_for_layout = X
 
-    steps += [
-        ("impute", build_imputer(X_for_layout)),
-        ("encode", build_encoder(X_for_layout)),
-    ]
+    steps.append(("impute", build_imputer(X_for_layout)))
+    if encode:
+        steps.append(("encode", build_encoder(X_for_layout)))
     return Pipeline(steps)
 ```
 
@@ -812,12 +840,17 @@ def build_preprocessor(X, derived_features: tuple = ()) -> Pipeline:
 | `if derived_features:` | ⚠️ **空元组 `()` 是"假值"** → 等价于"列表非空吗" |
 | `steps = []` … `steps.append((...))` | 先建空列表再往里加 —— 这样"可选步骤"能灵活拼装 |
 | `X.reindex(columns=col_names)` | 按给定列名**重排/新增**列；不存在的列自动填 `NaN` |
-| `steps += [...]` | `+=` 对列表是**原地扩展**（等价 `steps.extend(...)`） |
-| `Pipeline(steps)` | 用"步骤列表"构造流水线 |
+| ⭐ **`if encode:` 把一步变成"可选"** | `encode=False` 时**根本不加** `encode` 这一步 → 流水线变成"填充 → 模型" |
 
-> 🧒 **"假值"是 Python 常识，记住它**：下面这些在 `if` 里都算**假**
-> `False`、`0`、`0.0`、`""`（空字符串）、`[]`、`()`、`{}`、`None`
-> 所以 `if derived_features:` 就等于"列表非空吗"。**空元组默认值 + if 判断**，是"可选参数"的标准写法。
+> 🧒 **这就是"预处理要和模型配套"** —— 同一个项目，不同的模型要配不同的流水线：
+>
+> | 模型 | 需要的预处理 | 为什么 |
+> |---|---|---|
+> | Ridge / 随机森林 / XGBoost | 填充 → **One-Hot + Ordinal** | 它们只认数字 |
+> | **CatBoost** | 填充 →（**不编码**） | 它自己会处理原始类别列，而且做得更好 |
+>
+> 📌 **默认 `encode=True`**，所以老代码/老实验的行为**一字不变**（向后兼容）。
+> ⚠️ 用 `encode=False` 时，必须同时把类别列名通过模型的 `cat_features=...` 告诉它，否则模型会报错。
 
 > ⚠️ **为什么要有 `X_for_layout = X.reindex(...)` 这一步？**
 > 因为 `build_imputer` / `build_encoder` 只根据 **列名与类型** 决定"哪列归哪组"（**不读数值**）。
@@ -826,10 +859,13 @@ def build_preprocessor(X, derived_features: tuple = ()) -> Pipeline:
 > 🧒 一句话：**先把"新列的名字"登记好，再让后面的组件去认领它。**
 
 ```python
-def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
+def make_pipeline(model, X, derived_features: tuple = (),
+                  encode: bool = True) -> Pipeline:
     return Pipeline(
         [
-            ("prep", build_preprocessor(X, derived_features=derived_features)),
+            ("prep", build_preprocessor(
+                X, derived_features=derived_features, encode=encode
+            )),
             ("model", model),
         ]
     )
@@ -839,6 +875,7 @@ def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
 |---|---|
 | **嵌套 Pipeline** | `Pipeline` 里装另一个 `Pipeline`（`prep` 那一步） |
 | `derived_features=derived_features` | **关键字传参**：把本函数的参数透传给内层函数（名字一样，但必须显式写） |
+| **参数逐层透传** | `encode` 从 `make_pipeline` 一路传到 `build_preprocessor`（参数名保持一致才好传） |
 
 ## 4.7 本部分语法索引
 
@@ -866,6 +903,7 @@ def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
 | `smoke_encoder.py` | 冒烟：编码后是不是全数字 | ❌ |
 | `smoke_pipeline.py` | 冒烟：整条流水线能否端到端跑通 | ❌ |
 | `smoke_sklearn_concepts.py` | 概念验证：`fit` 原地修改 / `clone` / `Pipeline` / 正则化 | 参考分数（不算实验） |
+| `smoke_catboost_native.py` | 冒烟：原生 `cat_features` 能否跑通 + **clone 兼容性探测** | ❌ |
 | `run_baseline.py` | 基线实验：地板 vs Ridge | ✅ |
 | `run_experiment.py` | 特征工程 A/B 实验 | ✅ |
 | `run_model_experiment.py` | **模型升级**实验（换模型） | ✅ |
@@ -873,9 +911,10 @@ def make_pipeline(model, X, derived_features: tuple = ()) -> Pipeline:
 | `run_tuning_depth.py` | **调参**：单变量扫描 CatBoost `depth`（含过拟合诊断） | ✅ |
 | `run_tuning_lr_iters.py` | **调参**：联合扫描 `learning_rate × iterations` + 浅树诊断 | ✅ |
 | `run_tuning_seed_check.py` | **复核**：换一套数据划分，验证“最优配置”是否稳健 | ✅ |
+| `run_catboost_native.py` | **表示方式升级**：原生 `cat_features` vs One-Hot | ✅ |
 | `make_submission.py` | 生成提交文件 + 格式自检 | ❌ |
 
-## 5.1 公共骨架（13 个脚本几乎一样的部分）
+## 5.1 公共骨架（15 个脚本几乎一样的部分）
 
 ### ① 开头的文档字符串 —— 写清"怎么运行"
 
@@ -1409,6 +1448,174 @@ SEEDS = [42, 2024]
 > 📌 本脚本**固定** `random_seed=42`、**只换** `cv_rmse_log` 的 `seed` →
 > 这样就把"模型的不确定性"排除掉，**只考察"结论对数据划分是否敏感"**。
 > 一次只动一个变量的原则，在"复核实验"里同样适用。
+
+### `smoke_catboost_native.py` —— 冒烟 + **框架兼容性探测**
+
+```python
+import numpy as np
+from catboost import CatBoostRegressor
+from sklearn.base import clone
+```
+
+```python
+    model = CatBoostRegressor(
+        iterations=2, depth=3, verbose=0, allow_writing_files=False,
+        cat_features=cats,
+    )
+    pipe = make_pipeline(model, Xs, derived_features=BASE, encode=False)
+    pipe.fit(Xs, np.log1p(ys))
+    pred = pipe.predict(Xs)
+    ok = bool(np.all(np.isfinite(pred)))
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `np.all(np.isfinite(pred))` | 「**全部**都是有限数吗」→ 一次挡掉 NaN / inf |
+| `bool(...)` | 转成普通布尔（numpy 的 `bool_` 打印出来会带 `np.True_`） |
+| 只用 **200 行 + 2 棵树** | 冒烟测试只回答「**通不通**」，所以把规模压到最小 |
+
+#### ⭐ 本文件真正值钱的部分：第 ⑤ 项 **clone 兼容性探测**
+
+```python
+    variants = [
+        ("① 列表列名 list[str]", {"cat_features": cats}),
+        ("② 元组列名 tuple[str, ...]", {"cat_features": tuple(cats)}),
+        ("③ 列表下标 list[int]", {"cat_features": list(range(len(cats)))}),
+        ("④ 元组下标 tuple[int, ...]", {"cat_features": tuple(range(len(cats)))}),
+    ]
+    for label, kw in variants:
+        m = CatBoostRegressor(
+            iterations=2, depth=3, verbose=0,
+            allow_writing_files=False, **kw,
+        )
+        try:
+            clone(m)
+            print(f"   {label:28s} → ✅ 可以 clone")
+        except Exception as exc:      # noqa: BLE001 - 这里就是要捕获所有异常看现象
+            print(f"   {label:28s} → ❌ {type(exc).__name__}: {str(exc)[:48]}")
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`try: ... except Exception as exc:`** | 试着做；出错就跳进 `except`（**不中断程序**）。`as exc` 把异常对象接住 |
+| `type(exc).__name__` | 异常的**类型名**（字符串），如 `"RuntimeError"` |
+| `str(exc)[:48]` | 转成字符串后 **切片**取前 48 个字符（异常信息很长，截断才看得清） |
+| `**kw` | **字典解包**：把 `{"cat_features": ...}` 展开成 `cat_features=...` 关键字参数 |
+| `# noqa: BLE001` | 告诉检查工具「这里就是要裸捕获所有异常，别警告」 |
+
+> ⚠️ **为什么值得单独写个探测？** 因为踩到的坑是：
+>
+> ```
+> RuntimeError: Cannot clone object CatBoostRegressor(...),
+>   as the constructor either does not set or modifies parameter cat_features
+> ```
+>
+> - 这个错误发生在 `cv_rmse_log` 的**第一折**，**看起来像"CatBoost 坏了"**，其实是我们传参姿势不对。
+> - 根因：CatBoost 的 `__init__` 会把 **list** 型 `cat_features` **改写**成内部形式；
+>   而 sklearn 的 `clone` 要求「**构造函数不得修改传入的参数**」（用 `is` 做身份检查）。
+> - 解法：**传元组**（元组原样保留）。实测四种写法里只有**元组**能过。
+>
+> 🧒 **教训**：报错信息里出现 `Cannot clone object` 时，**先怀疑"参数被构造函数改写了"**，
+> 而不是去改 CV 代码。探测 4 种写法比瞎猜快得多 —— 这正是"冒烟测试"该干的事。
+
+### `run_catboost_native.py` —— 换"表示方式"：One-Hot vs 原生类别特征
+
+```python
+BASE = ("QualArea", "TotalSF")
+BEST = dict(iterations=1200, learning_rate=0.025, depth=6, random_seed=42)
+
+
+REPEATS = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+
+
+def model_with_cats(cat_cols: list[str] | None) -> CatBoostRegressor:
+    kwargs = dict(
+        **BEST,
+        verbose=0,
+        allow_writing_files=False,
+        # ⚠️ 不要加 thread_count=-1：小数据上开满线程反而更慢（见文件头说明）
+    )
+    if cat_cols:
+        kwargs["cat_features"] = tuple(cat_cols)   # ⚠️ 元组，不是列表
+    return CatBoostRegressor(**kwargs)
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`dict(**BEST, verbose=0, ...)`** | **`**` 解包 + 追加新键**：一行就能"在 BEST 基础上再加/覆盖几个参数"。若重复的键，**后面的覆盖前面的** |
+| `cat_cols: list[str] \| None` | 类型注解 `\|` = **或者**（可以传列表，也可以传 `None`） |
+| **`if cat_cols:`** | ⚠️ 又一次"假值"用法：`None` 和空列表都是假 → 等价于「传了类别列吗」 |
+| `tuple(cat_cols)` | 列表 → 元组（为了过 `clone`，见上一条） |
+
+```python
+    cats = cat_feature_names(X)
+    # ③ 专用副本：把 MSSubClass 转成字符串类别（否则 CatBoost 报 float 类型错误）
+    X_cat = X.assign(MSSubClass=X["MSSubClass"].astype(str))
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`X.assign(列=新值)`** | 返回一份**改了指定列的新表**（不就地修改原表）—— 做“平行对照数据”时很好用 |
+| `.astype(str)` | 转成字符串类型（“数字形式的类别”必须先变成真正的字符串） |
+
+```python
+    cases = [
+        ("① One-Hot 管道（现状·基准）", None, X),
+        ("② 原生 cat_features（43 列）", cats, X),
+        ("③ 原生 + MSSubClass 也算类别", cats + ["MSSubClass"], X_cat),
+    ]
+
+    for name, cat_cols, X_use in cases:
+        model = model_with_cats(cat_cols)
+        pipe = make_pipeline(
+            model, X_use,
+            derived_features=BASE,
+            encode=cat_cols is None,     # ① 编码；②③ 不编码（交给 CatBoost）
+        )
+        t0 = time.perf_counter()
+        mean, std = cv_rmse_log(pipe, X_use, y, n_repeats=REPEATS)
+        used = time.perf_counter() - t0
+        print(f"{name}  →  {mean:.5f} ± {std:.5f}   （用时 {used:.1f}s）")
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`cat_cols is None`** | 判断「是不是 `None`」**要用 `is`，不要用 `==`**（`None` 是单例） |
+| `encode=cat_cols is None` | 一行把两个开关**绑在一起**：不传类别列 → 才需要我们自己 One-Hot |
+| `cats + ["MSSubClass"]` | 列表拼接 → 在 43 列基础上多算一列 |
+| 枚举里放**三个**元素 | `(名字, 类别列, 用哪份数据)` —— 对照实验不只要换模型，有时还要换“喂哪份 X” |
+| **`time.perf_counter()`** | 取一个高精度**计时器读数**；两次相减 = 这段跑了几秒 |
+
+> ⚠️ **为什么要计时、为什么要 `REPEATS` 参数？**（这是真踩出来的教训）
+> 第一版脚本忘了这两样，结果“原生 cat_features”那一组卡了 **1.8 小时 CPU 时间**都没出结果，
+> 而我们**无法区分“在慢慢算”还是“死循环了”**。加上计时后立刻看清：
+>
+> | 组 | 用时（5 折） | 分数 |
+> |---|---|---|
+> | ① One-Hot | **22.4s** | 0.12347 |
+> | ② 原生 cat_features | **385.7s**（慢约 17 倍） | 0.12416 |
+> | ③ 原生 + MSSubClass | **270.1s** | 0.12386 |
+>
+> 🧒 **教训：跑得久的实验，必须让脚本自己报告进度与耗时** —— 否则你只能猜。
+> 另外，`REPEATS` 让人能先用 `… 1`（5 折）看趋势，值得再跑完整的 5×10。
+
+#### ⭐ 本文件的核心知识点：**同一个信息，可以有不同的「表示」**
+
+> 🧒 **One-Hot 的问题**（我们一直在用的做法）：
+> 43 个类别列 → 两百多列 0/1。比如 `Neighborhood` 有 25 个取值 → 25 列，
+> 每行只有 1 个 1、其余 24 个 0 —— **又稀又大**，而且它**完全丢掉了"这个类别贵不贵"**的信息。
+>
+> **CatBoost 的做法**：直接吃原始字符串列，在**内部**用「有序目标统计量」
+> （ordered target statistics）把每个类别换成一个跟 `SalePrice` 有关的数值。
+>
+> | | One-Hot（我们做的） | 原生 cat_features（CatBoost 做的） |
+> |---|---|---|
+> | 输入 | 两百多列 0/1 | 43 列原始字符串 |
+> | 是否用到 y | ❌ 不用 | ✅ 用（**内部带防泄漏机制**） |
+> | 信息量 | 只有"是不是这个类别" | 还有"这个类别大概值多少钱" |
+>
+> ⚠️ **注意这不是"调参"，而是换"表示方式"** —— 属于比调参更根本的改动。
+> 📌 为了公平，**超参数与特征配方完全不动**（沿用 E-2 的最好配置），一次只改这一个变量。
 
 ### `make_submission.py` 前半段 —— 全量训练 → `expm1` → 按 Id 对齐
 
