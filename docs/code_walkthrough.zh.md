@@ -15,7 +15,7 @@
 | 2 | `src/house_prices/evaluate.py` | §2.1 ~ §2.4 | ✅ |
 | 3 | `src/house_prices/preprocess.py` | §4.0 ~ §4.7 | ✅ |
 | 4 | `src/house_prices/models.py` | §六 | ✅ |
-| 5 | `tests/*.py`（15 个脚本） | §5.0 ~ §5.4 | ✅ |
+| 5 | `tests/*.py`（16 个脚本） | §5.0 ~ §5.4 | ✅ |
 
 > 📖 **读法**：先扫一眼 **§〇 语法总索引**，然后 **§一 → §六 从上到下读一遍** —— 即可覆盖项目**全部 Python 代码**。
 > 每个小节的组织固定为：**它干什么 → 逐句讲 → 语法点表**。
@@ -43,6 +43,9 @@
 | `tests/run_tuning_lr_iters.py` | ~110 行 | §5.1 + §5.2 |
 | `tests/run_tuning_seed_check.py` | ~90 行 | §5.1 + §5.2 |
 | `tests/run_catboost_native.py` | ~80 行 | §5.1 + §5.2 |
+| `tests/run_blend.py` | ~130 行 | §5.1 + §5.2 |
+| `tests/run_stacking.py` | ~130 行 | §5.1 + §5.2 |
+| `tests/run_feature_extra.py` | ~80 行 | §5.1 + §5.2 |
 | `tests/make_submission.py` | ~65 行 | §5.1 + §5.2 |
 
 > ⚠️ `notebooks/*.ipynb` 是**探索性分析**，不是可复用代码；它内部自带中文说明，不在本文档范围内。
@@ -117,6 +120,9 @@
 | 59 | **`sys.argv`** + `len(sys.argv) > 1` | §5.2 | 读**命令行参数**（`argv[0]` 是脚本名） |
 | 60 | `time.perf_counter()` | §5.2 | 高精度**计时器**；两次相减 = 耗时 |
 | 61 | `X.assign(列=新值)` + `.astype(str)` | §5.2 | 返回“改了一列的新表”（不就地改）；转字符串 |
+| 62 | **`itertools.product(A, B, repeat=n)`** | §5.2 | 笛卡尔积 → 造**参数网格** |
+| 63 | `np.column_stack([a, b, ...])` | §5.2 | 多个一维数组拼成一个**矩阵**（每列一个） |
+| 64 | `np.corrcoef(M, rowvar=False)` | §5.2 | **相关系数矩阵**（`rowvar=False` = 每列是一个变量） |
 
 ---
 
@@ -665,6 +671,17 @@ FEATURE_BUILDERS = {
     "HasBsmt": lambda X: (X["TotalBsmtSF"] > 0).astype(int),
     "HasGarage": lambda X: (X["GarageArea"] > 0).astype(int),
     "HasFireplace": lambda X: (X["Fireplaces"] > 0).astype(int),
+    # —— 批次 2（阶段 F 回头补特征）：房龄系 ——
+    # 原始数据里只有“年份”，而房价更关心“到卖的时候多少年了”
+    "HouseAge": lambda X: X["YrSold"] - X["YearBuilt"],
+    "RemodAge": lambda X: X["YrSold"] - X["YearRemodAdd"],
+    # 翻修过没有：YearRemodAdd == YearBuilt 表示“从未翻修”
+    "IsRemodeled": lambda X: (X["YearRemodAdd"] != X["YearBuilt"]).astype(int),
+    # —— 批次 2：卫浴总数（线性组合 → 与 TotalSF 同类）——
+    "TotalBath": lambda X: (
+        X["FullBath"] + 0.5 * X["HalfBath"]
+        + X["BsmtFullBath"] + 0.5 * X["BsmtHalfBath"]
+    ),
 }
 ```
 
@@ -674,6 +691,8 @@ FEATURE_BUILDERS = {
 | 字典里存函数 | **函数是"一等公民"**：能像数字一样存进字典、当参数传来传去 |
 | `X["列"] > 0` | **逐元素比较**，返回一整列 `True/False`（这就是"阈值化"） |
 | `(...).astype(int)` | 把布尔列**转成 0/1 整数**（`True→1`、`False→0`） |
+| **`!=` 比较两列** | `X["A"] != X["B"]` 逐元素比较 → 得到“两列不一样吗”的真假列 |
+| `A - B`（两列相减） | 逐元素相减 → “差值”这种**跨列**的新特征 |
 | 尾随逗号 | 最后一项后面的 `,` 合法且推荐（见 §4.2） |
 
 > ⚠️ **实测教训（见 `experiments.md` 实验 #7）**：这 5 个阈值标志**全部无效**，原因有二：
@@ -684,6 +703,22 @@ FEATURE_BUILDERS = {
 >
 > 🧒 **所以"非线性就一定有用"是错的**，正确说法是：**"非线性 + 真的新信息"才有用**。
 > 造特征前先问两句：**① 这列的值够不够分散？② 这个信息原特征里有没有？**
+
+> ⭐ **批次 2 又验证了一遍，而且结果更反直觉**（见 `experiments.md` 实验 #26）：
+>
+> | 新特征 | 与目标相关性 | CV 变化 |
+> |---|---|---|
+> | `HouseAge = YrSold - YearBuilt` | **−0.587**（很强） | +0.00020 ❌ |
+> | `TotalBath`（4 个分量相加） | **+0.673**（很强） | +0.00065 ❌ |
+> | `IsRemodeled`（跨列比较） | **−0.074**（很弱） | **−0.00061** ✅ 唯一为正 |
+>
+> 🧒 **为什么相关性最强的反而没用？**
+> - `HouseAge = 常数 − YearBuilt`，而 `YearBuilt` **本来就是特征** → 树早就通过它拿到这份信息了，
+>   做差只是“换一种说法”。`TotalBath` 同理（4 个分量列本来就在）。
+> - `IsRemodeled` 是**跨两列的比较**，**任何单列切分都造不出来** → 属于“新信息形状”，才有微弱增益。
+>
+> 📌 **一句话判据：能不能被现有的某一列（或它的单调变换）近似出来？**
+> 能 → 树早就会了；不能 → 才值得造。
 
 > 🧒 **为什么要把算式存进字典？**
 > 这样"**特征名**"和"**怎么算**"就**解耦**了：
@@ -914,9 +949,12 @@ def make_pipeline(model, X, derived_features: tuple = (),
 | `run_tuning_lr_iters.py` | **调参**：联合扫描 `learning_rate × iterations` + 浅树诊断 | ✅ |
 | `run_tuning_seed_check.py` | **复核**：换一套数据划分，验证“最优配置”是否稳健 | ✅ |
 | `run_catboost_native.py` | **表示方式升级**：原生 `cat_features` vs One-Hot | ✅ |
+| `run_blend.py` | **融合 F-1**：加权平均（OOF 评估 + 误差相关矩阵 + 权重网格） | ✅ |
+| `run_stacking.py` | **融合 F-2**：Stacking（嵌套 CV，元特征零泄漏） | ✅ |
+| `run_feature_extra.py` | **补特征**：候选特征体检 + 单个特征 A/B 筛选 | ✅ |
 | `make_submission.py` | 生成提交文件 + 格式自检 | ❌ |
 
-## 5.1 公共骨架（15 个脚本几乎一样的部分）
+## 5.1 公共骨架（16 个脚本几乎一样的部分）
 
 ### ① 开头的文档字符串 —— 写清"怎么运行"
 
@@ -1619,6 +1657,134 @@ def model_with_cats(cat_cols: list[str] | None) -> CatBoostRegressor:
 > ⚠️ **注意这不是"调参"，而是换"表示方式"** —— 属于比调参更根本的改动。
 > 📌 为了公平，**超参数与特征配方完全不动**（沿用 E-2 的最好配置），一次只改这一个变量。
 
+### `run_blend.py` —— 融合：**用 OOF 预测把“加权平均”评得干干净净**
+
+```python
+def oof_predictions(make_model, X, y_log) -> np.ndarray:
+    """生成 OOF 预测：每折用其余折训练，只预测本折 → 每行恰好被预测一次。"""
+    kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+    oof = np.zeros(len(y_log))
+    for tr_idx, va_idx in kf.split(X):
+        pipe = make_pipeline(make_model(), X, derived_features=BASE)
+        pipe.fit(X.iloc[tr_idx], y_log[tr_idx])
+        oof[va_idx] = pipe.predict(X.iloc[va_idx])
+    return oof
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `np.zeros(len(y_log))` | 先开一个**全 0 的容器**，再往对应位置填值 |
+| `oof[va_idx] = ...` | **花式索引赋值**：一次把一整批位置写进去（与 §〇 第 15 条同源） |
+| `y_log[tr_idx]` | `y_log` 已转成 numpy 数组 → 直接用整数下标取子集（**比 `y.iloc` 更方便**） |
+
+> 🧒 **为什么非要 OOF？** 如果直接拿“在全量数据上训练的模型的预测”去调权重，
+> 那就是“捂着答案调参”—— 分数会好得假。OOF 让每一行都拿到**没见过它**的预测。
+
+```python
+    errs = np.column_stack([oofs[n] - y_log for n in names])
+    corr = np.corrcoef(errs, rowvar=False)
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`np.column_stack([...])`** | 把多个**一维数组**竖着拼成一个矩阵（每个数组变成一列） |
+| `oofs[n] - y_log` | **误差** = 预测 − 真值（我们要的是“错的模式”，不是预测本身） |
+| **`np.corrcoef(M, rowvar=False)`** | 算**相关系数矩阵**；`rowvar=False` 告诉它“**每列**是一个变量”（默认是每行） |
+
+> ⭐ **这一小块是融合的灵魂**：相关系数越接近 0，两个模型的错越“互补”，平均才越有用。
+> 实测：池 A（Ridge/RF/CatBoost）= 0.68~0.87；池 B（三个 Boosting）= **0.94~0.98**。
+
+```python
+    for head in itertools.product(grid, repeat=len(names) - 1):
+        last = 1.0 - sum(head)
+        if last < -1e-9 or last > 1.0 + 1e-9:
+            continue          # 最后一个权重必须落在 [0, 1] 内
+        w = tuple(head) + (max(last, 0.0),)
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`itertools.product(grid, repeat=k)`** | **笛卡尔积**：从 grid 里可重复地取 k 个 → 正好是“k 维参数网格” |
+| `repeat=len(names) - 1` | 只生成前 n−1 个权重，最后一个**用减法算**（保证权重和为 1） |
+| `continue` | **跳过本轮**，直接进下一次循环（对比 `break` = 彻底退出循环） |
+| `tuple(head) + (max(last, 0.0),)` | 元组拼接；⚠️ 单元素元组**必须带逗号**（见 §〇 第 51 条） |
+
+> 🧒 **为什么要“最后一个用减法算”？** 否则会生成大量“权重和 ≠ 1”的组合，
+> 白白浪费计算（4 个模型步长 0.05 就要试上万组）。约束能提前剔掉。
+
+### `run_stacking.py` —— 融合：**嵌套 CV（元特征不能泄漏）**
+
+```python
+    for fold, (tr, va) in enumerate(outer.split(X), start=1):
+        # ---- 内层：只在外层训练行内部，用 K 折生成元特征 ----
+        inner = KFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+        meta_tr = np.zeros((len(tr), len(MODELS)))
+        for i_tr, i_va in inner.split(tr):
+            X_in, y_in = X.iloc[tr[i_tr]], y_log[tr[i_tr]]
+            X_hold = X.iloc[tr[i_va]]
+            for j, make_model in enumerate(MODELS.values()):
+                meta_tr[i_va, j] = fit_predict(make_model, X_in, y_in, X_hold)
+```
+
+| 语法点 | 说明 |
+|---|---|
+| **`inner.split(tr)`** | ⚠️ `KFold.split` 关心的是**长度**：传长度为 `len(tr)` 的数组 → 返回 **0..len(tr)-1 的“位置”**，不是原始行号 |
+| `tr[i_va]` | 把**位置**翻译回**原始行号** → 才能去 `X.iloc[...]` 取到正确的行 |
+| `meta_tr[i_va, j] = ...` | 二维数组按**两个下标**赋值（第 `i_va` 行、第 `j` 列） |
+| `np.zeros((行数, 列数))` | 开一个**二维**容器：行 = 样本，列 = 各基模型的预测 |
+
+> ⚠️ **这是本文件最容易写错的地方**：`位置` 与 `行号` 混了不会报错，只会**静默算错**。
+> 上面用 `tr[i_va]` 与 `meta_tr[i_va]` 分别处理“取数据”和“写容器”，就是要区分这两者。
+
+```python
+        meta_model = Ridge(alpha=1.0)
+        meta_model.fit(meta_tr, y_log[tr])
+        coefs.append(meta_model.coef_)
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `meta_model.coef_` | 线性模型的**系数**（末尾下划线 = “fit 学来的”，见 §〇 第 32 条）→ 它就是“学出来的权重” |
+| `coefs.append(...)` | 每折存一份，最后取平均 → 看“元模型到底重用了谁” |
+
+> 🧒 **对比一下两种融合的“诚实程度”**：
+>
+> | 做法 | 元特征怎么来 | 偏？ |
+> |---|---|---|
+> | 加权平均（F-1） | 一层 OOF，权重是**人搜**的 | 基本无偏 |
+> | Stacking 标准做法 | 一层 OOF，元模型在同一批元特征上 CV | **偏乐观** |
+> | **Stacking 嵌套（本文件）** | 元特征只在**外层训练行内部**生成 | **偏严格**（元特征质量略低） |
+>
+> 📌 实测三种口径都是 ≈ 0.126，**结论一致**：本项目融合不划算。
+
+### `run_feature_extra.py` —— 补特征：**先体检，再低成本筛选，最后才用贵尺子确认**
+
+```python
+REPEATS = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+```
+
+> 🧒 **两段式策略**：不写参数 = 5 折单次（~2 分钟）先把“明显没用”的筛掉；
+> 确认阶段再跑 `... 10`（5×10，~35 分钟）。避免“等 35 分钟才发现方向不对”。
+
+```python
+    for name in CANDIDATES:
+        col = FEATURE_BUILDERS[name](X)
+        n_na = int(col.isna().sum())
+        filled = col.fillna(col.median())        # 只为算相关性，临时补中位数
+        r = float(np.corrcoef(filled, y_log)[0, 1])
+```
+
+| 语法点 | 说明 |
+|---|---|
+| `FEATURE_BUILDERS[name](X)` | **从字典取函数并立即调用** —— “配方表”这个设计的好处（想加特征不用改代码逻辑） |
+| `col.fillna(col.median())` | 补缺失（**只为算相关性**，不是正式预处理；正式的在 Pipeline 里） |
+| `np.corrcoef(a, b)[0, 1]` | 只传两个一维数组时得到 2×2 矩阵，**取右上角那个数**才是相关系数 |
+
+> ⭐ **“体检”的价值**：它能在**不训练模型**的情况下先给出线索（与目标的相关性）。
+> 但实验 #26 提醒我们：**相关性高 ≠ 有增量信息** ——
+> `HouseAge` 与目标相关 −0.587 却完全没用，而相关只有 −0.074 的 `IsRemodeled` 反而略有效。
+> 🧒 **所以体检只能当“参考”，最终还是要用 CV 说话。**
+
 ### `make_submission.py` 前半段 —— 全量训练 → `expm1` → 按 Id 对齐
 
 ```python
@@ -1781,4 +1947,4 @@ def make_best_model() -> CatBoostRegressor:
 | 3 | `src/house_prices/evaluate.py` | ✅ |
 | 4 | `src/house_prices/preprocess.py` | ✅ |
 | 5 | `src/house_prices/models.py` | ✅ |
-| 6 | `tests/*.py`（15 个脚本） | ✅ |
+| 6 | `tests/*.py`（16 个脚本） | ✅ |

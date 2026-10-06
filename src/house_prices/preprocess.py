@@ -117,6 +117,19 @@ FEATURE_BUILDERS = {
     "HasBsmt": lambda X: (X["TotalBsmtSF"] > 0).astype(int),
     "HasGarage": lambda X: (X["GarageArea"] > 0).astype(int),
     "HasFireplace": lambda X: (X["Fireplaces"] > 0).astype(int),
+    # —— 批次 2（阶段 F 回头补特征）：房龄系 ——
+    # 原始数据里只有"年份"（YearBuilt / YrSold），而房价更关心"到卖的时候多少年了"。
+    # ⭐ 注意：这类特征是 `YrSold - YearBuilt`，**不是现有列的线性组合**
+    #    （现有列里没有 YrSold 与 YearBuilt 的差），所以对线性模型也有效。
+    "HouseAge": lambda X: X["YrSold"] - X["YearBuilt"],
+    "RemodAge": lambda X: X["YrSold"] - X["YearRemodAdd"],
+    # 翻修过没有：YearRemodAdd == YearBuilt 表示"从未翻修"
+    "IsRemodeled": lambda X: (X["YearRemodAdd"] != X["YearBuilt"]).astype(int),
+    # —— 批次 2：卫浴总数（线性组合 → 对树模型有效，和 TotalSF 同类）——
+    "TotalBath": lambda X: (
+        X["FullBath"] + 0.5 * X["HalfBath"]
+        + X["BsmtFullBath"] + 0.5 * X["BsmtHalfBath"]
+    ),
 }
 
 
