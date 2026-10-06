@@ -152,6 +152,10 @@ Kaggle 网页的提交页偶尔加载不出上传框（只显示一行 `Need hel
 教你**怎么看函数参数**、项目用到的 Python/numpy/pandas/sklearn 语法速查、
 以及"库要不要背"的答案（不背，但要会查）。
 
+**想知道"项目代码每一句在干什么"** → 看
+[`docs/code_walkthrough.zh.md`](docs/code_walkthrough.zh.md)：
+逐行讲解 `data.py` / `evaluate.py`（含语法拆解），`preprocess.py` 待续。
+
 ---
 
 ## 实验结果
