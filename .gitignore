@@ -18,6 +18,7 @@ data/processed/*
 # ---- Outputs ----
 submissions/*.csv
 !submissions/.gitkeep
+catboost_info/
 
 # ---- Editor / OS ----
 .vscode/settings.json

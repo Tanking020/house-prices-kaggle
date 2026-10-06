@@ -1,6 +1,7 @@
 asttokens==3.0.2
 attrs==26.1.0
 bleach==6.4.0
+catboost==1.2.10
 certifi==2026.7.22
 charset-normalizer==3.5.2
 cloudpickle==3.1.2
@@ -12,6 +13,7 @@ debugpy==1.8.22
 executing==2.2.1
 fastjsonschema==2.22.2
 fonttools==4.66.0
+graphviz==0.21
 idna==3.20
 ipykernel==7.3.0
 ipython==9.17.1
@@ -26,6 +28,7 @@ jupytext==1.19.6
 kaggle==2.2.4
 kagglesdk==0.1.37
 kiwisolver==1.5.1
+lightgbm==4.7.0
 markdown-it-py==4.2.0
 matplotlib==3.11.2
 matplotlib-inline==0.2.2
@@ -40,6 +43,7 @@ pandas==3.0.6
 parso==0.8.7
 pillow==12.3.0
 platformdirs==4.11.12
+plotly==7.1.0
 prompt_toolkit==3.0.53
 protobuf==7.36.2
 psutil==7.2.2
@@ -69,3 +73,4 @@ tzdata==2026.4
 urllib3==2.8.0
 wcwidth==0.9.1
 webencodings==0.6.1
+xgboost==3.4.1
